@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>邱家財務管家 — Family AI Financial Manager</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans TC", sans-serif;}
+.bar-fill { transition: width 0.4s ease;}
+input, select, textarea { color-scheme: dark;}
+</style>
+</head>
+<body class="bg-gray-800 text-white min-h-screen">
+<div class="max-w-4xl mx-auto px-4 py-8">
+
+<!-- Header -->
+<header class="mb-6">
+<div class="flex items-center gap-3 flex-wrap">
+<h1 class="text-3xl font-bold">🧾 邱家財務管家</h1>
+<span class="text-xs bg-gray-700 text-gray-300 rounded-full px-2.5 py-1">Family AI Financial Manager</span>
+<span class="text-xs bg-gray-700 text-gray-300 rounded-full px-2.5 py-1">100% 在瀏覽器執行 · 資料不上傳到任何伺服器</span>
+</div>
+<p class="text-gray-300 mt-2">上傳收據、存摺或信用卡帳單（圖片或 PDF），Gemini AI 會照邱家的記帳規則擷取、分類、去重，再產生預算報告。每月上限 NT$100,000。</p>
+<a href="https://shengkae.github.io/" class="text-sm text-sky-400 hover:text-sky-300 underline">← Back to all tools</a>
+<div id="userBar" class="mt-3 text-sm text-gray-300"></div>
+</header>
+
+<!-- Budget snapshot -->
+<section class="bg-gray-900 rounded-xl p-5 shadow-lg mb-6">
+<div class="flex justify-between items-baseline flex-wrap gap-2">
+<h2 class="text-lg font-semibold">🎯 本月預算（<span id="budgetMonth"></span>）</h2>
+<span id="budgetRemaining" class="text-xl font-bold"></span>
+</div>
+<div class="w-full bg-gray-700 rounded-full h-3 overflow-hidden mt-3">
+<div id="budgetBar" class="bar-fill bg-emerald-500 h-3 rounded-full" style="width: 0%"></div>
+</div>
+<p id="budgetDetail" class="text-gray-400 text-sm mt-2"></p>
+<p id="budgetInsight" class="text-gray-300 text-sm mt-1"></p>
+</section>
+
+<!-- Settings -->
+<section class="bg-gray-900 rounded-xl p-5 shadow-lg mb-6">
+<button id="settingsToggle" class="w-full flex justify-between items-center text-left">
+<h2 class="text-lg font-semibold">⚙️ 設定（Gemini API 金鑰 · Gmail · Google 登入）</h2>
+<span id="settingsChevron" class="text-gray-400">▾</span>
+</button>
+<div id="settingsBody" class="mt-4 space-y-4">
+<div>
+<label class="block text-sm text-gray-300 mb-1" for="apiKeyInput">Gemini API 金鑰（必填，存在你的瀏覽器，不會上傳）</label>
+<div class="flex gap-2">
+<input id="apiKeyInput" type="password" placeholder="貼上你的 Gemini API 金鑰" class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-400" />
+<button id="saveKeyBtn" class="bg-sky-500 hover:bg-sky-400 px-4 py-2 rounded-lg text-sm font-semibold">儲存</button>
+<button id="clearKeyBtn" class="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded-lg text-sm">清除</button>
+</div>
+<p class="text-gray-500 text-xs mt-1">沒有金鑰？到 <a class="text-sky-400 underline" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> 免費取得。金鑰只存在你的瀏覽器 localStorage，直接呼叫 Google Gemini API。</p>
+<p id="keyStatus" class="text-sm mt-1"></p>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+<div>
+<label class="block text-sm text-gray-300 mb-1" for="modelSelect">Gemini 模型</label>
+<select id="modelSelect" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-400">
+<option value="gemini-2.0-flash" selected>gemini-2.0-flash（快速，推薦）</option>
+<option value="gemini-1.5-flash">gemini-1.5-flash</option>
+<option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite（最便宜）</option>
+</select>
+</div>
+<div>
+<label class="block text-sm text-gray-300 mb-1" for="gmailInput">你的 Gmail（收預算報告）</label>
+<input id="gmailInput" type="email" placeholder="例如 shengkae.chiou@gmail.com" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-400" />
+</div>
+</div>
+<div>
+<label class="block text-sm text-gray-300 mb-1" for="clientIdInput">Google OAuth Client ID（選填，啟用「使用 Google 登入」）</label>
+<input id="clientIdInput" type="text" placeholder="xxx.apps.googleusercontent.com（沒有可留空，記帳功能不受影響）" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-400" />
+<p class="text-gray-500 text-xs mt-1">在 Google Cloud Console 建立 OAuth Client ID（Web 應用程式），把這個網址加入已授權的 JavaScript 來源。登入只用來識別你是誰、預填收件 Gmail；記帳資料仍存在你的瀏覽器，不會上傳。</p>
+</div>
+<div id="signinArea"></div>
+</div>
+</section>
+
+<!-- Upload -->
+<section class="bg-gray-900 rounded-xl p-5 shadow-lg mb-6">
+<h2 class="text-lg font-semibold mb-3">📤 上傳收據 / 帳單</h2>
+<div id="dropZone" class="border-2 border-dashed border-gray-600 rounded-lg p-6 text-center cursor-pointer hover:border-sky-400 transition-colors">
+<p class="text-lg">拖放檔案到這裡，或 <span class="text-sky-400 underline">點此選擇</span></p>
+<p class="text-gray-400 text-sm mt-1">收據、存摺、信用卡帳單 — 圖片（PNG / JPG）或 PDF。手機可直接拍照上傳。</p>
+<input id="fileInput" type="file" accept="image/*,.pdf" class="hidden" />
+<p id="fileName" class="text-sm text-emerald-400 mt-2 hidden"></p>
+</div>
+<div class="flex gap-4 mt-4 flex-wrap items-center">
+<label class="text-sm text-gray-300">這份文件是：</label>
+<label class="text-sm"><input type="radio" name="sourceType" value="receipt" checked class="mr-1" />🧾 收據 / 消費單據</label>
+<label class="text-sm"><input type="radio" name="sourceType" value="statement" class="mr-1" />💳 信用卡帳單 PDF（對帳依據）</label>
+<button id="processBtn" class="bg-sky-500 hover:bg-sky-400 text-white font-semibold px-5 py-2 rounded-lg disabled:opacity-40 ml-auto" disabled>🤖 Gemini 辨識</button>
+</div>
+<div id="processStatus" class="hidden mt-4">
+<p id="processLabel" class="text-sm text-gray-300"></p>
+<div class="w-full bg-gray-700 rounded-full h-2.5 overflow-hidden mt-2">
+<div id="processBar" class="bar-fill bg-sky-500 h-2.5 rounded-full" style="width: 0%"></div>
+</div>
+</div>
+<p id="errorMsg" class="text-red-400 text-sm mt-3 hidden"></p>
+</section>
+
+<!-- Review (AI result) -->
+<section id="reviewSec" class="hidden bg-gray-900 rounded-xl p-5 shadow-lg mb-6">
+<h2 class="text-lg font-semibold mb-1">🧠 AI 辨識結果（請核對後再存入）</h2>
+<p id="reviewNote" class="text-gray-400 text-sm mb-4"></p>
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+<div>
+<label class="block text-sm text-gray-300 mb-1">商店 / 來源</label>
+<input id="rvStore" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm" />
+</div>
+<div>
+<label class="block text-sm text-gray-300 mb-1">日期</label>
+<input id="rvDate" type="date" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm" />
+</div>
+<div>
+<label class="block text-sm text-gray-300 mb-1">支付方式</label>
+<input id="rvPay" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm" />
+</div>
+<div>
+<label class="block text-sm text-gray-300 mb-1">總金額（NT$）</label>
+<input id="rvTotal" type="number" min="0" step="1" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm" />
+</div>
+</div>
+<div class="mt-4">
+<label class="block text-sm text-gray-300 mb-1">拆帳明細（分類 / 金額）</label>
+<div id="rvItems" class="space-y-2"></div>
+<button id="addItemBtn" class="mt-2 bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded-lg text-sm">＋ 新增一筆拆帳</button>
+</div>
+<div class="flex gap-4 mt-4 flex-wrap items-center">
+<label class="text-sm"><input id="rvApplePay" type="checkbox" class="mr-1" />🍎 Apple Pay</label>
+<label class="text-sm"><input id="rvExcluded" type="checkbox" class="mr-1" />🚫 不計入支出（內部轉帳 / 投資 / 收入）</label>
+</div>
+<div class="mt-4">
+<label class="block text-sm text-gray-300 mb-1">AI 防呆備註</label>
+<textarea id="rvNotes" rows="2" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm"></textarea>
+</div>
+<div id="rvRawWrap" class="mt-4 hidden">
+<button id="rvRawToggle" class="text-sm text-sky-400 underline">顯示 Gemini 原始回傳（除錯用）</button>
+<pre id="rvRaw" class="hidden mt-2 bg-gray-800 border border-gray-700 rounded-lg p-3 text-xs overflow-auto max-h-64 whitespace-pre-wrap"></pre>
+</div>
+<div class="flex gap-3 mt-4 flex-wrap">
+<button id="saveTxBtn" class="bg-emerald-500 hover:bg-emerald-400 text-white font-semibold px-5 py-2 rounded-lg">✅ 存入帳本</button>
+<button id="discardTxBtn" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">捨棄</button>
+</div>
+<p id="saveMsg" class="text-emerald-400 text-sm mt-2 hidden"></p>
+</section>
+
+<!-- Ledger -->
+<section class="bg-gray-900 rounded-xl p-5 shadow-lg mb-6">
+<div class="flex justify-between items-center flex-wrap gap-2">
+<h2 class="text-lg font-semibold">📒 帳本</h2>
+<div class="flex gap-2 items-center">
+<select id="filterMonth" class="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-sm"></select>
+<select id="filterCat" class="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-sm">
+<option value="">全部類別</option>
+</select>
+<button id="exportBtn" class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded-lg text-sm">匯出 CSV</button>
+<button id="clearAllBtn" class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded-lg text-sm">清空帳本</button>
+</div>
+</div>
+<div id="ledgerList" class="mt-4 space-y-2"></div>
+<p id="ledgerEmpty" class="text-gray-500 text-sm mt-4">還沒有記帳。先在上方設定 Gemini 金鑰，再上傳第一張收據。</p>
+<div id="catBreakdown" class="mt-5"></div>
+</section>
+
+<!-- Email report -->
+<section class="bg-gray-900 rounded-xl p-5 shadow-lg mb-6">
+<h2 class="text-lg font-semibold mb-1">✉️ 預算報告（寄到你的 Gmail）</h2>
+<p class="text-gray-400 text-sm mb-3">以下為最新一筆記帳的報告範本。靜態網頁無法直接用 Gmail API 寄信，所以提供「複製 HTML」與「用 Gmail 開新郵件」兩種方式，內容與範本一致。</p>
+<div class="flex gap-3 flex-wrap mb-3">
+<button id="reportBtn" class="bg-sky-500 hover:bg-sky-400 text-white font-semibold px-4 py-2 rounded-lg text-sm">產生最新報告</button>
+<button id="copyHtmlBtn" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm" disabled>複製 HTML</button>
+<button id="gmailBtn" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm" disabled>用 Gmail 開新郵件</button>
+</div>
+<div id="reportPreview" class="hidden bg-white text-gray-900 rounded-lg p-4 text-sm"></div>
+<p id="copyMsg" class="text-emerald-400 text-sm mt-2 hidden">已複製。</p>
+</section>
+
+<footer class="text-gray-500 text-xs mt-8 text-center">
+邱家財務管家 · 資料只存在你的瀏覽器（localStorage），不上傳到任何伺服器。Gemini API 金鑰只用來直接呼叫 Google API。信用卡帳單 PDF 為對帳依據：重複的收據會被帳單紀錄合併，避免重複計算。
+</footer>
+</div>
+
+<script type="module">
+/* ================================================================
+邱家財務管家 — client-side only.
+Gemini key lives in localStorage, calls Google directly.
+Ledger lives in localStorage. No backend, no server.
+================================================================ */
+const $ = id => document.getElementById(id);
+const LS_KEY = "chiu-finance-v1";
+const LS_TX = "chiu-finance-tx-v1";
+const BUDGET_LIMIT = 100000;
+
+const CATEGORIES = ["","","","","","","","",""];
+
+/* ---------- The Brain: Gemini system prompt (from the spec, verbatim) ---------- */
+const SYSTEM_PROMPT = `You are the Chiu Family's expert AI Financial Controller. Extract data from the provided receipt, bank statement, or credit card bill. Output in strict JSON format.
+
+**CRITICAL RULES & CAVEATS (DO NOT VIOLATE):**
+
+**1. Virtual Card Resolution (Anti-Double Counting):**
+If you see credit card numbers ending in \`4084\` or \`8\`, DO NOT treat them as new cards. These are virtual tokens for Apple Pay / Mobile Pay. Map them strictly to the main card: \`玉山信用卡 (E.SUN Card 0657)\`.
+
+**2. Internal Transfers & Investments (EXCLUDE FROM EXPENSES):**
+If the transaction contains ANY of the following keywords, set the expense amount to 0, mark as \`Excluded\`, and add a note explaining why:
+- Keywords: \`玉山卡款扣繳\`, \`華銀信用\` (Paying credit card bills)
+- Keywords: \`基金申購款\`, \`證交款\`, \`申購款－申退\`, \`收益配\`, \`存單利息\`, \`贖回\`, \`發票獎金\`, \`勞保局 就保給付\`, \`股息\` (Investments / Income)
+
+**3. Smart Receipt Splitting (Supermarkets):**
+For receipts from \`全聯 (PX Mart)\` or \`家樂福 (Carrefour)\`:
+- Extract fresh food/groceries (meat, vegetables, eggs, milk) into \`\`.
+- Extract household items (toilet paper, pads, toothpaste, hangers) into \`\`.
+- Distribute discounts proportionally.
+
+**4. Strict Category Mapping:**
+- \`179號5樓管理費\`, \`遠傳電信\`, \`欣欣瓦斯\`, \`台電\`, \`市水\` -> \`\`
+- \`東山高中\`, \`EMBA\`, \`台科大\`, \`補習班\`, \`書籍費\` -> \`\`
+- \`南山人壽\`, \`新光人壽\`, \`台銀人壽\`, \`職業工會保費\`, \`勞保局國保\`, \`醫院\` -> \`\`
+- \`ATM提款\`, \`ATM跨提優\` -> \`\`
+- \`牌照稅\`, \`房屋稅\`, \`地價稅\`, \`綜所稅\`, \`燃料費(公路養管費)\` -> \`\`
+- \`Q Burger\`, \`早點Morning\`, \`餐廳\`, \`LINE Pay(連加)儲值\` -> \`\`
+
+**5. Apple Pay Tracking:**
+If a transaction has an 'A' mark on the E.SUN bill, or uses the virtual cards mentioned in Rule 1, tag it with \`isApplePay: true\`.
+
+**OUTPUT — return ONLY a JSON object with this shape (no markdown, no extra text):**
+{"store": "store or payee name", "date": "YYYY-MM-DD", "paymentMethod": "payment method / card", "isApplePay": false, "excluded": false, "excludeReason": "", "total": 0, "items": [{"category": "", "amount": 0, "note": ""}], "notes": "one-line caveat / observation"}`;
+
+/* ---------- Client-side rules engine (enforces the same rules on Gemini's output) ---------- */
+const EXCLUDE_KEYWORDS = ["玉山卡款扣繳","華銀信用","基金申購款","證交款","申購款－申退","申購款-申退","收益配","存單利息","贖回","發票獎金","勞保局","就保給付","股息"];
+const CAT_RULES = [
+{ kws: ["179號5樓管理費","遠傳電信","欣欣瓦斯","台電","市水"], cat: ""},
+{ kws: ["東山高中","EMBA","台科大","補習班","書籍費"], cat: ""},
+{ kws: ["南山人壽","新光人壽","台銀人壽","職業工會保費","勞保局國保","醫院"], cat: ""},
+{ kws: ["ATM提款","ATM跨提優"], cat: ""},
+{ kws: ["牌照稅","房屋稅","地價稅","綜所稅","燃料費","公路養管費"], cat: ""},
+{ kws: ["Q Burger","早點Morning","餐廳","LINE Pay","連加"], cat: ""},
+];
+function categoryFor(text) {
+const t = (text || "");
+for (const r of CAT_RULES) if (r.kws.some(k => t.includes(k))) return r.cat;
+return null;
+}
+function applyChiuRules(d) {
+const out = JSON.parse(JSON.stringify(d || {}));
+out.store = out.store || "";
+out.paymentMethod = out.paymentMethod || "";
+out.items = Array.isArray(out.items)? out.items: [];
+// Rule 1: virtual cards -> E.SUN 0657 + Apple Pay
+const payText = out.paymentMethod + " " + (out.notes || "");
+if (/4084/.test(payText) || /卡號\D*8\b/.test(payText) || /末四碼\D*8\b/.test(payText) || /Apple Pay/i.test(payText)) {
+out.paymentMethod = "玉山信用卡 (E.SUN Card 0657)";
+out.isApplePay = true;
+}
+// Rule 5: 'A' mark on E.SUN bill
+if (/玉山/.test(out.paymentMethod) && /\bA\b/.test(out.notes || "")) out.isApplePay = true;
+// Rule 2: exclusion keywords -> amount 0 + Excluded
+const hay = out.store + " " + (out.notes || "") + " " + out.items.map(i => (i.note || "") + (i.category || "")).join(" ");
+const hit = EXCLUDE_KEYWORDS.find(k => hay.includes(k));
+if (hit) {
+out.excluded = true;
+out.excludeReason = "含有「" + hit + "」，屬於內部轉帳 / 投資 / 收入，不計入支出。";
+out.total = 0;
+out.items = out.items.map(i => ({...i, amount: 0}));
+}
+// Rule 4: category mapping for items missing a category
+out.items = out.items.map(i => {
+if (!i.category || i.category === "") {
+const c = categoryFor(out.store + " " + (i.note || ""));
+if (c) i.category = c;
+}
+return i;
+});
+if (!out.items.length && out.total > 0) {
+const c = categoryFor(out.store) || "";
+out.items = [{ category: c, amount: out.total, note: ""}];
+}
+if (out.excluded) out.total = 0;
+else if (out.items.length) out.total = out.items.reduce((s, i) => s + (Number(i.amount) || 0), 0);
+return out;
+}
+
+/* ---------- State ---------- */
+function loadSettings() {
+try { return JSON.parse(localStorage.getItem(LS_KEY) || "{}");} catch { return {};}
+}
+function saveSettings(s) { localStorage.setItem(LS_KEY, JSON.stringify(s));}
+function loadTx() {
+try { return JSON.parse(localStorage.getItem(LS_TX) || "[]");} catch { return [];}
+}
+function saveTx(list) { localStorage.setItem(LS_TX, JSON.stringify(list));}
+let settings = loadSettings();
+let transactions = loadTx();
+let currentFile = null, currentFileName = "", currentMime = "", currentB64 = "";
+let currentResult = null, currentSourceType = "receipt";
+let signedInUser = null;
+
+const fmt$ = n => "NT$" + (Number(n) || 0).toLocaleString("zh-Hant-TW");
+const todayStr = () => new Date().toISOString().slice(0, 10);
+const monthOf = d => (d || "").slice(0, 7);
+function esc(s) { return String(s?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");}
+
+/* ---------- Settings UI ---------- */
+$("apiKeyInput").value = settings.apiKey || "";
+$("modelSelect").value = settings.model || "gemini-2.0-flash";
+$("gmailInput").value = settings.gmail || "";
+$("clientIdInput").value = settings.googleClientId || "";
+function refreshKeyStatus() {
+$("keyStatus").textContent = settings.apiKey? "✅ 已設定 Gemini 金鑰（存在你的瀏覽器）。": "⚠️ 尚未設定 Gemini 金鑰 — 先設定才能辨識收據。";
+$("keyStatus").className = "text-sm mt-1 " + (settings.apiKey? "text-emerald-400": "text-amber-300");
+}
+refreshKeyStatus();
+$("saveKeyBtn").addEventListener("click", () => {
+settings.apiKey = $("apiKeyInput").value.trim();
+settings.model = $("modelSelect").value;
+settings.gmail = $("gmailInput").value.trim();
+settings.googleClientId = $("clientIdInput").value.trim();
+saveSettings(settings);
+refreshKeyStatus();
+initSignIn();
+});
+$("clearKeyBtn").addEventListener("click", () => {
+settings.apiKey = "";
+$("apiKeyInput").value = "";
+saveSettings(settings);
+refreshKeyStatus();
+});
+$("modelSelect").addEventListener("change", () => { settings.model = $("modelSelect").value; saveSettings(settings);});
+$("gmailInput").addEventListener("change", () => { settings.gmail = $("gmailInput").value.trim(); saveSettings(settings);});
+$("clientIdInput").addEventListener("change", () => { settings.googleClientId = $("clientIdInput").value.trim(); saveSettings(settings); initSignIn();});
+$("settingsToggle").addEventListener("click", () => {
+const b = $("settingsBody");
+b.classList.toggle("hidden");
+$("settingsChevron").textContent = b.classList.contains("hidden")? "▸": "▾";
+});
+
+/* ---------- Google sign-in (optional; needs a Client ID) ---------- */
+function initSignIn() {
+const area = $("signinArea");
+area.innerHTML = "";
+$("userBar").textContent = signedInUser? ("已登入：" + signedInUser.name + "（" + signedInUser.email + "）"): "";
+const cid = (settings.googleClientId || "").trim();
+if (!cid) {
+area.innerHTML = '<p class="text-gray-500 text-xs">未設定 Google Client ID — 登入為選填，不影響記帳（資料存在你的瀏覽器）。</p>';
+return;
+}
+if (!window.google ||!google.accounts) {
+area.innerHTML = '<p class="text-gray-500 text-xs">Google 登入元件載入中…（需要連網）</p>';
+setTimeout(initSignIn, 1500);
+return;
+}
+try {
+google.accounts.id.initialize({
+client_id: cid,
+callback: (resp) => {
+try {
+const payload = JSON.parse(atob(resp.credential.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+signedInUser = { name: payload.name || "", email: payload.email || ""};
+if (signedInUser.email &&!$("gmailInput").value) { $("gmailInput").value = signedInUser.email; settings.gmail = signedInUser.email; saveSettings(settings);}
+$("userBar").textContent = "已登入：" + signedInUser.name + "（" + signedInUser.email + "）";
+area.innerHTML = '<p class="text-emerald-400 text-sm">✅ 已用 Google 登入：' + esc(signedInUser.name) + "（" + esc(signedInUser.email) + "）</p>";
+} catch (e) { area.innerHTML = '<p class="text-red-400 text-sm">登入回傳解析失敗：' + esc(e.message) + "</p>";}
+},
+});
+google.accounts.id.renderButton(area, { theme: "outline", size: "large", text: "signin_with", locale: "zh-TW"});
+} catch (e) {
+area.innerHTML = '<p class="text-red-400 text-sm">Google 登入初始化失敗：' + esc(e.message) + "</p>";
+}
+}
+window.addEventListener("load", initSignIn);
+
+/* ---------- Upload ---------- */
+const dropZone = $("dropZone"), fileInput = $("fileInput");
+dropZone.addEventListener("click", () => fileInput.click());
+["dragover", "dragenter"].forEach(ev => dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.add("border-sky-400");}));
+["dragleave", "drop"].forEach(ev => dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.remove("border-sky-400");}));
+dropZone.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) handleFile(f);});
+fileInput.addEventListener("change", () => { if (fileInput.files[0]) handleFile(fileInput.files[0]);});
+document.querySelectorAll('input[name="sourceType"]').forEach(r => r.addEventListener("change", () => { currentSourceType = document.querySelector('input[name="sourceType"]:checked').value;}));
+
+function showError(msg) { const el = $("errorMsg"); el.textContent = msg; el.classList.remove("hidden");}
+function clearError() { $("errorMsg").classList.add("hidden"); $("errorMsg").textContent = "";}
+
+async function handleFile(file) {
+clearError();
+currentFile = file;
+currentFileName = file.name || "receipt";
+currentMime = file.type || (currentFileName.toLowerCase().endsWith(".pdf")? "application/pdf": "image/jpeg");
+$("fileName").textContent = "已選取：" + currentFileName + " (" + (file.size / 1048576).toFixed(1) + " MB)";
+$("fileName").classList.remove("hidden");
+$("processBtn").disabled = false;
+try {
+const buf = await file.arrayBuffer();
+let b64 = "";
+const bytes = new Uint8Array(buf);
+const chunk = 0x8000;
+for (let i = 0; i < bytes.length; i += chunk) b64 += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+currentB64 = btoa(b64);
+} catch (e) {
+currentB64 = "";
+showError("讀取檔案失敗：" + e.message);
+}
+}
+
+function setProcess(label, pct) {
+$("processStatus").classList.remove("hidden");
+$("processLabel").textContent = label;
+$("processBar").style.width = Math.max(0, Math.min(100, pct)) + "%";
+}
+function hideProcess() { $("processStatus").classList.add("hidden");}
+
+/* ---------- Gemini call ---------- */
+$("processBtn").addEventListener("click", async () => {
+if (!currentFile ||!currentB64) { showError("請先選擇檔案。"); return;}
+if (!settings.apiKey) { showError("請先在設定區填入 Gemini API 金鑰。"); return;}
+clearError();
+$("processBtn").disabled = true;
+setProcess("Gemini 辨識中…（第一次可能要幾秒）", 30);
+try {
+const model = settings.model || "gemini-2.0-flash";
+const url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + encodeURIComponent(settings.apiKey);
+const res = await fetch(url, {
+method: "POST",
+headers: { "Content-Type": "application/json"},
+body: JSON.stringify({
+system_instruction: { parts: [{ text: SYSTEM_PROMPT}]},
+contents: [{ parts: [
+{ text: "請依系統提示，擷取這份文件並只回傳 JSON。"},
+{ inline_data: { mime_type: currentMime, data: currentB64}},
+]}],
+generationConfig: { temperature: 0.1, response_mime_type: "application/json"},
+}),
+});
+setProcess("Gemini 回傳中…", 70);
+const data = await res.json();
+if (!res.ok) throw new Error((data.error && data.error.message) || ("Gemini API 錯誤（HTTP " + res.status + "）"));
+const text = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts || []).map(p => p.text || "").join("");
+if (!text) throw new Error("Gemini 沒有回傳文字。");
+let parsed;
+try {
+parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
+} catch (e) {
+parsed = { store: "", date: todayStr(), paymentMethod: "", isApplePay: false, excluded: false, total: 0, items: [], notes: "Gemini 回傳不是合法 JSON，請手動填寫。原始內容在下方。"};
+showRaw(text);
+}
+currentResult = applyChiuRules(parsed);
+currentResult.sourceType = currentSourceType;
+currentResult.fileName = currentFileName;
+showReview(currentResult, text);
+setProcess("完成 — 請核對後存入帳本。", 100);
+setTimeout(hideProcess, 1200);
+} catch (e) {
+hideProcess();
+showError("辨識失敗：" + e.message);
+} finally {
+$("processBtn").disabled = false;
+}
+});
+function showRaw(text) {
+$("rvRawWrap").classList.remove("hidden");
+$("rvRaw").textContent = text;
+}
+
+/* ---------- Review form ---------- */
+function itemRow(cat, amount, note) {
+const row = document.createElement("div");
+row.className = "flex gap-2 items-center";
+row.innerHTML =
+'<select class="rv-cat flex-1 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-sm">' +
+CATEGORIES.map(c => '<option value="' + esc(c) + '"' + (c === cat? " selected": "") + ">" + esc(c) + "</option>").join("") +
+'</select>' +
+'<input type="number" min="0" step="1" class="rv-amt w-28 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-sm" value="' + (Number(amount) || 0) + '" />' +
+'<input class="rv-note flex-1 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-sm" placeholder="備註（選填）" value="' + esc(note || "") + '" />' +
+'<button class="rv-del bg-gray-700 hover:bg-gray-600 px-2 py-1.5 rounded-lg text-sm">✕</button>';
+row.querySelector(".rv-del").addEventListener("click", () => { row.remove(); syncTotalFromItems();});
+row.querySelector(".rv-amt").addEventListener("input", syncTotalFromItems);
+return row;
+}
+function syncTotalFromItems() {
+const sum = [...document.querySelectorAll("#rvItems.rv-amt")].reduce((s, el) => s + (Number(el.value) || 0), 0);
+if (!$("rvExcluded").checked) $("rvTotal").value = sum;
+}
+function showReview(d, rawText) {
+$("reviewSec").classList.remove("hidden");
+$("reviewNote").textContent = "來源：" + (d.fileName || "") + "（" + (d.sourceType === "statement"? "信用卡帳單 PDF — 對帳依據": "收據 / 消費單據") + "）· 邱家規則已自動套用（虛擬卡、排除關鍵字、分類對照），請核對。";
+$("rvStore").value = d.store || "";
+$("rvDate").value = (d.date || todayStr()).slice(0, 10);
+$("rvPay").value = d.paymentMethod || "";
+$("rvTotal").value = d.total || 0;
+$("rvApplePay").checked =!!d.isApplePay;
+$("rvExcluded").checked =!!d.excluded;
+$("rvNotes").value = (d.notes || "") + (d.excludeReason? ("｜" + d.excludeReason): "");
+const itemsEl = $("rvItems");
+itemsEl.innerHTML = "";
+(d.items || []).forEach(i => itemsEl.appendChild(itemRow(i.category, i.amount, i.note)));
+if (!d.items ||!d.items.length) itemsEl.appendChild(itemRow("", d.total || 0, ""));
+$("saveMsg").classList.add("hidden");
+if (rawText) showRaw(rawText);
+$("reviewSec").scrollIntoView({ behavior: "smooth", block: "start"});
+}
+$("addItemBtn").addEventListener("click", () => { $("rvItems").appendChild(itemRow("", 0, ""));});
+$("rvExcluded").addEventListener("change", () => { if ($("rvExcluded").checked) $("rvTotal").value = 0; else syncTotalFromItems();});
+$("rvRawToggle").addEventListener("click", () => { $("rvRaw").classList.toggle("hidden");});
+$("discardTxBtn").addEventListener("click", () => { $("reviewSec").classList.add("hidden"); currentResult = null;});
+
+/* ---------- Save + de-dup ---------- */
+$("saveTxBtn").addEventListener("click", () => {
+const items = [...document.querySelectorAll("#rvItems.rv-cat")].map((sel, i) => ({
+category: sel.value,
+amount: Number(document.querySelectorAll("#rvItems.rv-amt")[i].value) || 0,
+note: document.querySelectorAll("#rvItems.rv-note")[i].value || "",
+})).filter(i => i.amount > 0 || i.note);
+const tx = applyChiuRules({
+store: $("rvStore").value.trim(),
+date: $("rvDate").value || todayStr(),
+paymentMethod: $("rvPay").value.trim(),
+isApplePay: $("rvApplePay").checked,
+excluded: $("rvExcluded").checked,
+total: Number($("rvTotal").value) || 0,
+items,
+notes: $("rvNotes").value.trim(),
+sourceType: currentResult? currentResult.sourceType: currentSourceType,
+fileName: currentResult? currentResult.fileName: currentFileName,
+});
+tx.id = "tx_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+tx.createdAt = new Date().toISOString();
+// De-dup: same store + amount + date
+const dup = transactions.find(t => t.store === tx.store && t.total === tx.total && t.date === tx.date &&!t.excluded &&!tx.excluded);
+if (dup && tx.sourceType === "statement") {
+// Credit card statement is the source of truth: replace the receipt record.
+transactions = transactions.filter(t => t.id!== dup.id);
+transactions.push(tx);
+saveTx(transactions);
+$("saveMsg").textContent = "✅ 已存入，並以信用卡帳單覆蓋了同一筆收據（避免重複計算 " + fmt$(tx.total) + "）。";
+} else if (dup) {
+$("saveMsg").textContent = "⚠️ 已有相同商店、金額、日期的紀錄，未重複存入。";
+} else {
+transactions.push(tx);
+saveTx(transactions);
+$("saveMsg").textContent = "✅ 已存入帳本。";
+}
+$("saveMsg").classList.remove("hidden");
+renderAll();
+});
+
+/* ---------- Ledger + dashboard ---------- */
+function monthOptions() {
+const months = [...new Set(transactions.map(t => monthOf(t.date)))].sort().reverse();
+const cur = new Date().toISOString().slice(0, 7);
+if (!months.includes(cur)) months.unshift(cur);
+return months;
+}
+function renderAll() {
+// Month filter
+const fm = $("filterMonth");
+const prev = fm.value;
+fm.innerHTML = monthOptions().map(m => '<option value="' + m + '">' + m + "</option>").join("");
+if ([...fm.options].some(o => o.value === prev)) fm.value = prev;
+// Category filter
+const fc = $("filterCat");
+const prevC = fc.value;
+fc.innerHTML = '<option value="">全部類別</option>' + CATEGORIES.map(c => '<option value="' + esc(c) + '">' + esc(c) + "</option>").join("");
+if (prevC) fc.value = prevC;
+renderLedger();
+renderDashboard();
+}
+function visibleTx() {
+const m = $("filterMonth").value;
+const c = $("filterCat").value;
+return transactions.filter(t => (!m || monthOf(t.date) === m) && (!c || t.items.some(i => i.category === c))).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+}
+function renderLedger() {
+const list = visibleTx();
+const el = $("ledgerList");
+el.innerHTML = "";
+$("ledgerEmpty").style.display = list.length? "none": "block";
+list.forEach(t => {
+const row = document.createElement("div");
+row.className = "bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 flex gap-3 items-start";
+const cats = t.items.map(i => i.category + " " + fmt$(i.amount)).join(" · ");
+row.innerHTML =
+'<div class="flex-1 min-w-0">' +
+'<div class="flex gap-2 items-baseline flex-wrap"><span class="font-semibold">' + esc(t.store || "（未命名）") + '</span>' +
+'<span class="text-gray-400 text-xs">' + esc(t.date) + '</span>' +
+(t.sourceType === "statement"? '<span class="text-xs bg-sky-900 text-sky-300 rounded px-1.5 py-0.5">帳單</span>': '<span class="text-xs bg-gray-700 text-gray-300 rounded px-1.5 py-0.5">收據</span>') +
+(t.isApplePay? '<span class="text-xs">🍎</span>': "") +
+(t.excluded? '<span class="text-xs bg-gray-700 text-gray-400 rounded px-1.5 py-0.5">不計入支出</span>': "") +
+"</div>" +
+'<div class="text-sm text-gray-300 mt-0.5">' + esc(cats || "—") + "</div>" +
+'<div class="text-xs text-gray-500 mt-0.5">' + esc(t.paymentMethod || "") + (t.notes? " · " + esc(t.notes): "") + "</div>" +
+"</div>" +
+'<div class="text-right shrink-0"><div class="font-bold ' + (t.excluded? "text-gray-500 line-through": "") + '">' + fmt$(t.total) + "</div>" +
+'<button class="del-btn text-red-400 text-xs underline mt-1" data-id="' + t.id + '">刪除</button></div>';
+el.appendChild(row);
+});
+el.querySelectorAll(".del-btn").forEach(b => b.addEventListener("click", () => {
+transactions = transactions.filter(t => t.id!== b.dataset.id);
+saveTx(transactions);
+renderAll();
+}));
+// Category breakdown for the selected month
+const m = $("filterMonth").value;
+const monthTx = transactions.filter(t => monthOf(t.date) === m &&!t.excluded);
+const byCat = {};
+monthTx.forEach(t => t.items.forEach(i => { byCat[i.category] = (byCat[i.category] || 0) + (Number(i.amount) || 0);}));
+const bd = $("catBreakdown");
+const entries = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+bd.innerHTML = entries.length
+? '<h3 class="font-semibold mb-2">本月分類統計（' + m + "）</h3>" + entries.map(([c, v]) => '<div class="flex justify-between text-sm py-1 border-b border-gray-800"><span>' + esc(c) + "</span><span>" + fmt$(v) + "</span></div>").join("")
+: "";
+}
+function renderDashboard() {
+const cur = new Date().toISOString().slice(0, 7);
+const monthTx = transactions.filter(t => monthOf(t.date) === cur &&!t.excluded);
+const total = monthTx.reduce((s, t) => s + (Number(t.total) || 0), 0);
+const remaining = BUDGET_LIMIT - total;
+const pct = Math.max(0, Math.min(100, (total / BUDGET_LIMIT) * 100));
+$("budgetMonth").textContent = cur;
+$("budgetRemaining").textContent = "剩餘 " + fmt$(remaining);
+$("budgetRemaining").className = "text-xl font-bold " + (remaining < 0? "text-red-400": remaining < 20000? "text-amber-300": "text-emerald-400");
+$("budgetBar").style.width = pct + "%";
+$("budgetBar").className = "bar-fill h-3 rounded-full " + (pct >= 100? "bg-red-500": pct >= 80? "bg-amber-400": "bg-emerald-500");
+$("budgetDetail").textContent = "本月累積支出 " + fmt$(total) + " / 上限 " + fmt$(BUDGET_LIMIT) + "（" + pct.toFixed(0) + "%）· " + monthTx.length + " 筆";
+$("budgetInsight").textContent =
+remaining < 0? "💡 已超支 " + fmt$(-remaining) + "，建議暫停非必要消費。":
+remaining < 20000? "💡 剩餘不到兩成，請留意本月後半的支出。":
+total === 0? "💡 本月還沒有支出紀錄，上傳第一張收據開始記帳吧。":
+"💡 照目前速度，本月可控制在預算內，剩餘 " + fmt$(remaining) + " 可用。";
+}
+$("filterMonth").addEventListener("change", renderAll);
+$("filterCat").addEventListener("change", renderAll);
+$("exportBtn").addEventListener("click", () => {
+const rows = [["日期","商店","支付方式","ApplePay","類別","金額","不計入支出","備註"]];
+transactions.forEach(t => t.items.forEach(i => rows.push([t.date, t.store, t.paymentMethod, t.isApplePay? "是": "否", i.category, i.amount, t.excluded? "是": "否", (i.note || "") + (t.notes? "｜" + t.notes: "")])));
+const csv = "\uFEFF" + rows.map(r => r.map(v => '"' + String(v?? "").replace(/"/g, '""') + '"').join(",")).join("\n");
+const blob = new Blob([csv], { type: "text/csv;charset=utf-8"});
+const a = document.createElement("a");
+a.href = URL.createObjectURL(blob);
+a.download = "chiu-family-finance.csv";
+document.body.appendChild(a); a.click(); a.remove();
+});
+$("clearAllBtn").addEventListener("click", () => {
+if (!transactions.length) return;
+if (!confirm("確定清空全部 " + transactions.length + " 筆記帳嗎？此動作無法復原。")) return;
+transactions = [];
+saveTx(transactions);
+renderAll();
+});
+
+/* ---------- Email report ---------- */
+let lastReportHtml = "", lastReportText = "", lastReportSubject = "";
+$("reportBtn").addEventListener("click", () => {
+const cur = new Date().toISOString().slice(0, 7);
+const monthTx = transactions.filter(t => monthOf(t.date) === cur &&!t.excluded);
+const monthlyTotal = monthTx.reduce((s, t) => s + (Number(t.total) || 0), 0);
+const remaining = BUDGET_LIMIT - monthlyTotal;
+const latest = [...transactions].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))[0];
+const insight = remaining < 0? "本月已超支，請暫停非必要消費。": remaining < 20000? "剩餘不到兩成，請留意後半月支出。": "照目前速度，本月可控制在預算內。";
+const itemsHtml = latest? latest.items.map(i => "<li>" + esc(i.category) + ": $" + (Number(i.amount) || 0).toLocaleString() + "</li>").join(""): "<li>（尚無記帳）</li>";
+const itemsText = latest? latest.items.map(i => " - " + i.category + ": $" + (Number(i.amount) || 0).toLocaleString()).join("\n"): " （尚無記帳）";
+lastReportSubject = "🧾 邱家財務管家：最新記帳成功與預算報告";
+lastReportHtml =
+"<h3>✅ 記帳成功！</h3>" +
+"<p><strong>資料來源：</strong> " + esc(latest? latest.store: "—") + "</p>" +
+"<p><strong>支付方式：</strong> " + esc(latest? latest.paymentMethod: "—") + " (Apple Pay: " + (latest && latest.isApplePay? "是": "否") + ")</p>" +
+"<h4>🧠 AI 拆帳明細：</h4><ul>" + itemsHtml + "</ul>" +
+"<p><em>防呆備註：" + esc(latest? (latest.notes || "—"): "—") + "</em></p><hr>" +
+"<h3>🎯 10 萬元限額戰況 (" + cur + ")</h3><ul>" +
+"<li><strong>本次新增：</strong> $" + (latest? (Number(latest.total) || 0).toLocaleString(): "0") + "</li>" +
+"<li><strong>本月累積總支出：</strong> $" + monthlyTotal.toLocaleString() + "</li>" +
+'<li><strong>本月剩餘可用額度：</strong> <span style="color: green;">$' + remaining.toLocaleString() + "</span></li></ul>" +
+"<p><em>💡 財務長洞察：" + insight + "</em></p>";
+lastReportText =
+"✅ 記帳成功！\n資料來源：" + (latest? latest.store: "—") +
+"\n支付方式：" + (latest? latest.paymentMethod: "—") + " (Apple Pay: " + (latest && latest.isApplePay? "是": "否") + ")" +
+"\n\n🧠 AI 拆帳明細：\n" + itemsText +
+"\n防呆備註：" + (latest? (latest.notes || "—"): "—") +
+"\n\n🎯 10 萬元限額戰況 (" + cur + ")" +
+"\n本次新增：$" + (latest? (Number(latest.total) || 0).toLocaleString(): "0") +
+"\n本月累積總支出：$" + monthlyTotal.toLocaleString() +
+"\n本月剩餘可用額度：$" + remaining.toLocaleString() +
+"\n💡 財務長洞察：" + insight;
+$("reportPreview").innerHTML = lastReportHtml;
+$("reportPreview").classList.remove("hidden");
+$("copyHtmlBtn").disabled = false;
+$("gmailBtn").disabled = false;
+});
+$("copyHtmlBtn").addEventListener("click", async () => {
+try {
+await navigator.clipboard.writeText(lastReportHtml);
+$("copyMsg").textContent = "已複製 HTML。";
+$("copyMsg").classList.remove("hidden");
+setTimeout(() => $("copyMsg").classList.add("hidden"), 2000);
+} catch (e) { alert("複製失敗：" + e.message);}
+});
+$("gmailBtn").addEventListener("click", () => {
+const to = settings.gmail || (signedInUser && signedInUser.email) || "";
+const url = "https://mail.google.com/mail/?view=cm&fs=1" + (to? "&to=" + encodeURIComponent(to): "") + "&su=" + encodeURIComponent(lastReportSubject) + "&body=" + encodeURIComponent(lastReportText);
+window.open(url, "_blank");
+});
+
+renderAll();
+</script>
+</body>
+</html>
