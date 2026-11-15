@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI Doc Checker — How much of your doc is AI-written?</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<style>
+  body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .gauge-ring { transition: stroke-dashoffset 0.8s ease, stroke 0.8s ease; }
+  .bar-fill { transition: width 0.6s ease; }
+  mark.ai { background: rgba(250, 204, 21, 0.35); color: #fef3c7; border-radius: 3px; padding: 0 1px; }
+  textarea { scrollbar-width: thin; }
+</style>
+</head>
+<body class="bg-gray-800 text-white min-h-screen">
+<div class="max-w-4xl mx-auto px-4 py-8">
+
+  <!-- Header -->
+  <header class="mb-6">
+    <div class="flex items-center gap-3 flex-wrap">
+      <h1 class="text-3xl font-bold">AI Doc Checker</h1>
+      <span class="text-xs bg-gray-700 text-gray-300 rounded-full px-2.5 py-1">runs 100% in your browser — nothing is uploaded</span>
+    </div>
+    <p class="text-gray-300 mt-2">Upload a document or paste text to estimate how much of it reads as AI-generated, then humanize it to lower the score.</p>
+    <p class="text-gray-400 text-sm mt-1">Heuristic estimate, not a definitive detector. It looks at writing patterns (repetitive phrasing, uniform sentences, AI clichés) — use it as a guide, not a verdict.</p>
+    <a href="https://shengkae.github.io/screen-capture-pdf/" class="text-sm text-sky-400 hover:text-sky-300 underline">← Back to Continuous Screen Capture Tool</a>
+  </header>
+
+  <!-- Input -->
+  <section class="bg-gray-900 rounded-xl p-5 shadow-lg">
+    <div id="dropZone" class="border-2 border-dashed border-gray-600 rounded-lg p-6 text-center cursor-pointer hover:border-sky-400 transition-colors">
+      <p class="text-lg">Drop a document here, or <span class="text-sky-400 underline">browse</span></p>
+      <p class="text-gray-400 text-sm mt-1">Supports .txt, .md and .docx — or just paste text below</p>
+      <input id="fileInput" type="file" accept=".txt,.md,.docx" class="hidden" />
+      <p id="fileName" class="text-sm text-emerald-400 mt-2 hidden"></p>
+    </div>
+
+    <textarea id="inputText" rows="9" placeholder="Paste your document text here…" class="w-full mt-4 bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm focus:outline-none focus:border-sky-400 resize-y"></textarea>
+
+    <div class="flex items-center gap-3 mt-3 flex-wrap">
+      <button id="analyzeBtn" class="bg-sky-500 hover:bg-sky-400 text-white font-semibold px-5 py-2 rounded-lg disabled:opacity-40" disabled>Analyze</button>
+      <button id="clearBtn" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">Clear</button>
+      <button id="sampleBtn" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">Try a sample</button>
+      <span id="wordCount" class="text-gray-400 text-sm ml-auto">0 words</span>
+    </div>
+  </section>
+
+  <!-- Results -->
+  <section id="results" class="hidden mt-6 bg-gray-900 rounded-xl p-5 shadow-lg">
+    <h2 class="text-xl font-semibold mb-4">AI likelihood</h2>
+    <div class="flex flex-col sm:flex-row items-center gap-6">
+      <div class="relative w-40 h-40 shrink-0">
+        <svg viewBox="0 0 120 120" class="w-40 h-40 -rotate-90">
+          <circle cx="60" cy="60" r="52" fill="none" stroke="#374151" stroke-width="10" />
+          <circle id="gaugeArc" class="gauge-ring" cx="60" cy="60" r="52" fill="none" stroke="#22c55e" stroke-width="10" stroke-linecap="round" stroke-dasharray="326.7" stroke-dashoffset="326.7" />
+        </svg>
+        <div class="absolute inset-0 flex flex-col items-center justify-center">
+          <span id="scoreNum" class="text-4xl font-bold">0%</span>
+          <span class="text-xs text-gray-400">AI-generated</span>
+        </div>
+      </div>
+      <div class="flex-1 w-full">
+        <p id="verdict" class="text-lg font-semibold"></p>
+        <p id="verdictSub" class="text-gray-400 text-sm mt-1"></p>
+        <div id="factors" class="mt-4 space-y-3"></div>
+      </div>
+    </div>
+    <div class="mt-5">
+      <h3 class="font-semibold mb-2">Flagged AI-style phrases <span id="phraseCount" class="text-gray-400 text-sm font-normal"></span></h3>
+      <div id="phraseList" class="flex flex-wrap gap-2"></div>
+      <p id="noPhrases" class="text-gray-400 text-sm hidden">No common AI clichés found.</p>
+    </div>
+  </section>
+
+  <!-- Humanizer -->
+  <section id="humanizer" class="hidden mt-6 bg-gray-900 rounded-xl p-5 shadow-lg">
+    <h2 class="text-xl font-semibold mb-1">Humanize it</h2>
+    <p class="text-gray-400 text-sm mb-4">Rewrites AI clichés, adds contractions, breaks up uniform sentences and trims filler — then re-scores the result.</p>
+    <button id="humanizeBtn" class="bg-emerald-500 hover:bg-emerald-400 text-white font-semibold px-5 py-2 rounded-lg">Humanize this text</button>
+    <div id="humanizedWrap" class="hidden mt-4">
+      <div class="flex items-center gap-4 flex-wrap mb-2">
+        <span class="text-sm">New score: <span id="newScore" class="font-bold text-emerald-400"></span></span>
+        <span id="scoreDelta" class="text-sm text-gray-300"></span>
+      </div>
+      <textarea id="humanizedText" rows="9" readonly class="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm resize-y"></textarea>
+      <div class="flex gap-3 mt-3 flex-wrap">
+        <button id="copyBtn" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">Copy humanized text</button>
+        <button id="downloadBtn" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">Download .txt</button>
+        <button id="useHumanizedBtn" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">Re-check this version</button>
+      </div>
+      <p id="copyMsg" class="text-emerald-400 text-sm mt-2 hidden">Copied to clipboard.</p>
+    </div>
+  </section>
+
+  <footer class="text-gray-500 text-xs mt-8 text-center">
+    Heuristic, client-side check. No text leaves your browser. For a definitive assessment, use a dedicated detector or human review.
+  </footer>
+</div>
+
+<script>
+/* ================= AI phrase list ================= */
+const AI_PHRASES = [
+  "delve into","delve","in conclusion","furthermore","moreover","in addition","additionally",
+  "it is important to note","it is worth noting","it should be noted","it is crucial to",
+  "it's important to note","it's worth noting","in today's fast-paced world","in the ever-evolving landscape",
+  "tapestry","landscape of","realm of","pivotal","crucial role","plays a crucial role",
+  "a testament to","shed light on","navigate the complexities","in summary","to summarize",
+  "on the other hand","as a result","consequently","in light of","with that being said",
+  "at the end of the day","when it comes to","in terms of","the fact that","utilize","utilise",
+  "leverage","facilitate","underscore","underscores","highlight the importance",
+  "not only but also","in order to","due to the fact that","a wide range of","a variety of",
+  "cutting-edge","state-of-the-art","groundbreaking","revolutionize","seamless","seamlessly",
+  "empower","foster","fostering","holistic","paramount","intricate","intricacies",
+  "multifaceted","nuanced","nuances","delve deeper","let's explore","let's dive",
+  "in this article","in this blog","overall","ultimately","firstly","secondly","thirdly",
+  "lastly","in essence","in other words","that being said","it is evident","it is clear that",
+  "significant impact","game-changer","game changer","unlock the potential","harness the power",
+  "embark on","embarking on","rich tapestry","vibrant","bustling","nestled",
+  "a myriad of","myriad","plethora","a plethora of","boasts","boast",
+  "meticulous","meticulously","comprehensive","comprehensively","robust","robustly"
+];
+
+/* ================= Humanizer replacements ================= */
+const REPLACEMENTS = [
+  [/delve into/gi, "look at"], [/delve/gi, "dig into"],
+  [/in conclusion/gi, ""], [/furthermore/gi, "What's more"], [/moreover/gi, "Plus"],
+  [/in addition/gi, "On top of that"], [/additionally/gi, "And"],
+  [/it is important to note that/gi, ""], [/it's important to note that/gi, ""],
+  [/it is worth noting that/gi, ""], [/it's worth noting that/gi, ""],
+  [/it should be noted that/gi, ""], [/it is crucial to/gi, "you need to"],
+  [/in today's fast-paced world/gi, "These days"],
+  [/in the ever-evolving landscape of/gi, "in"], [/in the ever-evolving landscape/gi, "today"],
+  [/plays a crucial role/gi, "is key"], [/crucial role/gi, "key part"],
+  [/plays an important role/gi, "matters"], [/important role/gi, "big part"],
+  [/tapestry/gi, "mix"],
+  [/a testament to/gi, "proof of"], [/shed light on/gi, "explain"],
+  [/navigate the complexities of/gi, "handle"], [/in summary/gi, "In short"],
+  [/to summarize/gi, "In short"], [/on the other hand/gi, "But"],
+  [/as a result/gi, "That means"], [/consequently/gi, "So"], [/in light of/gi, "Given"],
+  [/with that being said/gi, "Still"], [/at the end of the day/gi, "In the end"],
+  [/when it comes to/gi, "For"], [/in terms of/gi, "For"], [/the fact that/gi, "that"],
+  [/utilize/gi, "use"], [/utilise/gi, "use"], [/leverage/gi, "use"],
+  [/facilitate/gi, "help"], [/underscore/gi, "show"], [/underscores/gi, "shows"],
+  [/highlight the importance of/gi, "show why"],
+  [/not only, but also/gi, "both"], [/in order to/gi, "to"],
+  [/due to the fact that/gi, "because"], [/a wide range of/gi, "many"],
+  [/a variety of/gi, "different"], [/cutting-edge/gi, "new"],
+  [/state-of-the-art/gi, "latest"], [/groundbreaking/gi, "big"],
+  [/revolutionize/gi, "change"], [/seamless/gi, "smooth"], [/seamlessly/gi, "smoothly"],
+  [/empower/gi, "help"], [/foster/gi, "build"], [/fostering/gi, "building"],
+  [/holistic/gi, "whole"], [/paramount/gi, "key"], [/intricate/gi, "detailed"],
+  [/intricacies/gi, "details"], [/multifaceted/gi, "many-sided"],
+  [/nuanced/gi, "subtle"], [/nuances/gi, "details"],
+  [/delve deeper/gi, "dig deeper"], [/let's explore/gi, "here's"],
+  [/let's dive/gi, "here's"], [/in this article/gi, "here"],
+  [/in this blog/gi, "here"], [/overall/gi, "all in all"],
+  [/ultimately/gi, "in the end"], [/firstly/gi, "first"], [/secondly/gi, "second"],
+  [/thirdly/gi, "third"], [/lastly/gi, "finally"], [/in essence/gi, "basically"],
+  [/in other words/gi, "meaning"], [/that being said/gi, "still"],
+  [/it is evident that/gi, ""], [/it is clear that/gi, ""],
+  [/significant impact/gi, "big effect"], [/game-changer/gi, "big change"],
+  [/game changer/gi, "big change"], [/unlock the potential of/gi, "get the most from"],
+  [/harness the power of/gi, "use"], [/harnessing the power of/gi, "using"], [/embark on/gi, "start"],
+  [/embarking on/gi, "starting"], [/rich tapestry/gi, "rich mix"],
+  [/a myriad of/gi, "many"], [/myriad/gi, "many"], [/plethora/gi, "lots"],
+  [/a plethora of/gi, "lots of"], [/boasts/gi, "has"], [/boast/gi, "have"],
+  [/meticulous/gi, "careful"], [/meticulously/gi, "carefully"],
+  [/comprehensive/gi, "thorough"], [/comprehensively/gi, "thoroughly"],
+  [/robust/gi, "solid"], [/robustly/gi, "solidly"],
+  [/\bit is\b/gi, "it's"], [/\bthat is\b/gi, "that's"], [/\bthere is\b/gi, "there's"],
+  [/\bdo not\b/gi, "don't"], [/\bdoes not\b/gi, "doesn't"], [/\bdid not\b/gi, "didn't"],
+  [/\bcannot\b/gi, "can't"], [/\bwill not\b/gi, "won't"], [/\bwould not\b/gi, "wouldn't"],
+  [/\bshould not\b/gi, "shouldn't"], [/\bcould not\b/gi, "couldn't"],
+  [/\bI am\b/gi, "I'm"], [/\byou are\b/gi, "you're"], [/\bwe are\b/gi, "we're"],
+  [/\bthey are\b/gi, "they're"], [/\bit will\b/gi, "it'll"], [/\bwe will\b/gi, "we'll"],
+  [/\byou will\b/gi, "you'll"], [/\bI will\b/gi, "I'll"], [/\bhave not\b/gi, "haven't"],
+  [/\bhas not\b/gi, "hasn't"], [/\bis not\b/gi, "isn't"], [/\bare not\b/gi, "aren't"],
+  [/\bwas not\b/gi, "wasn't"], [/\bwere not\b/gi, "weren't"]
+];
+
+/* ================= Text helpers ================= */
+function splitSentences(text) {
+  return text.replace(/\n+/g, " ").match(/[^.!?]+[.!?]+["')\]]*\s*/g) || (text.trim() ? [text.trim()] : []);
+}
+function wordsOf(s) { return s.trim().split(/\s+/).filter(Boolean); }
+function wordCount(text) { return wordsOf(text).length; }
+
+function analyze(text) {
+  const sentences = splitSentences(text).map(s => s.trim()).filter(Boolean);
+  const words = wordsOf(text);
+  const total = words.length;
+  const lower = " " + text.toLowerCase().replace(/\s+/g, " ") + " ";
+
+  // 1. AI phrase density
+  const found = {};
+  let phraseHits = 0;
+  AI_PHRASES.forEach(p => {
+    const re = new RegExp("\\b" + p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "gi");
+    const m = text.match(re);
+    if (m) { found[p] = m.length; phraseHits += m.length; }
+  });
+  const phraseDensity = total ? phraseHits / total * 1000 : 0; // hits per 1000 words
+  const phraseScore = Math.min(100, phraseDensity * 8);
+
+  // 2. Burstiness: coefficient of variation of sentence word counts
+  const lens = sentences.map(s => wordsOf(s).length).filter(n => n > 0);
+  const mean = lens.length ? lens.reduce((a, b) => a + b, 0) / lens.length : 0;
+  const sd = lens.length > 1 ? Math.sqrt(lens.reduce((a, n) => a + (n - mean) ** 2, 0) / lens.length) : 0;
+  const cv = mean ? sd / mean : 0;
+  // Human writing usually CV > 0.55; uniform AI text often < 0.45
+  const burstScore = Math.max(0, Math.min(100, (0.62 - cv) / 0.62 * 100));
+
+  // 3. Sentence-length uniformity: share of sentences within ±3 words of the mean
+  // (unreliable on tiny samples — neutral when fewer than 5 sentences)
+  const nearMean = mean ? lens.filter(n => Math.abs(n - mean) <= 3).length / lens.length : 0;
+  const uniformScore = lens.length >= 5 ? Math.round(nearMean * 100) : 40;
+
+  // 4. Lexical diversity (type-token ratio)
+  const unique = new Set(words.map(w => w.toLowerCase().replace(/[^a-z0-9']/g, ""))).size;
+  const ttr = total ? unique / total : 0;
+  // Very low diversity reads repetitive; very high is human. AI often sits mid-low.
+  const diversityScore = Math.max(0, Math.min(100, (0.55 - ttr) / 0.55 * 100));
+
+  // 5. Repetitive sentence starters
+  const starters = sentences.map(s => (s.match(/^[A-Za-z']+/) || [""])[0].toLowerCase()).filter(Boolean);
+  const starterCounts = {};
+  starters.forEach(s => starterCounts[s] = (starterCounts[s] || 0) + 1);
+  const topStarter = starters.length ? Math.max(...Object.values(starterCounts)) / starters.length : 0;
+  const starterScore = Math.round(Math.max(0, (topStarter - 0.15) / 0.35 * 100));
+
+  // 6. Formal connector overuse
+  const connectors = ["however", "therefore", "thus", "hence", "nevertheless", "nonetheless", "accordingly", "in contrast", "conversely", "subsequently"];
+  let connHits = 0;
+  connectors.forEach(c => { const m = lower.match(new RegExp("\\b" + c + "\\b", "g")); if (m) connHits += m.length; });
+  const connDensity = total ? connHits / total * 1000 : 0;
+  const connScore = Math.min(100, connDensity * 25);
+
+  const factors = [
+    { name: "AI cliché phrases", score: Math.round(phraseScore), weight: 0.30, detail: phraseHits + " hit" + (phraseHits === 1 ? "" : "s") },
+    { name: "Sentence burstiness", score: Math.round(burstScore), weight: 0.25, detail: "length varies " + (cv < 0.45 ? "very little" : cv < 0.6 ? "a bit" : "naturally") },
+    { name: "Uniform sentence length", score: uniformScore, weight: 0.15, detail: Math.round(nearMean * 100) + "% of sentences near the average length" },
+    { name: "Vocabulary diversity", score: Math.round(diversityScore), weight: 0.15, detail: Math.round(ttr * 100) + "% unique words" },
+    { name: "Repetitive sentence starters", score: starterScore, weight: 0.10, detail: "top starter opens " + Math.round(topStarter * 100) + "% of sentences" },
+    { name: "Formal connectors", score: Math.round(connScore), weight: 0.05, detail: connHits + " formal connector" + (connHits === 1 ? "" : "s") }
+  ];
+  const totalScore = Math.round(factors.reduce((a, f) => a + f.score * f.weight, 0));
+  return { score: totalScore, factors, found, phraseHits, sentences: sentences.length, words: total };
+}
+
+function verdictFor(score) {
+  if (score < 25) return ["Likely human-written", "Reads naturally — varied sentences, few AI tells."];
+  if (score < 50) return ["Mixed — mostly human, some AI-style passages", "A few patterns look machine-like. Humanizing the flagged phrases should help."];
+  if (score < 75) return ["Likely AI-generated", "Strong AI signals: repetitive phrasing and uniform structure."];
+  return ["Very likely AI-generated", "Reads like raw AI output. Humanize it before publishing."];
+}
+
+/* ================= Humanizer ================= */
+function humanize(text) {
+  let out = text;
+  REPLACEMENTS.forEach(([re, rep]) => { out = out.replace(re, rep); });
+  // Trim filler openers left behind
+  out = out.replace(/^\s*(note that|so,?)\s+/gim, "");
+  // Split very long sentences at a comma + conjunction
+  const parts = out.split(/(?<=[.!?])\s+/);
+  const rebuilt = parts.map(s => {
+    const w = wordsOf(s);
+    if (w.length > 30) {
+      const m = s.match(/^(.*?), (and|but|which|while|so) (.*)$/);
+      if (m) {
+        let second = m[3].trim();
+        second = second.charAt(0).toUpperCase() + second.slice(1);
+        return m[1].trim() + ". " + second;
+      }
+    }
+    return s;
+  });
+  out = rebuilt.join(" ");
+  // Clean up double spaces, stray punctuation, and re-capitalize sentence starts
+  out = out.replace(/ {2,}/g, " ").replace(/\s+([,.!?])/g, "$1").replace(/\. \./g, ".");
+  out = out.replace(/([.!?]\s+)([a-z])/g, (m, p, c) => p + c.toUpperCase());
+  out = out.replace(/^[a-z]/, c => c.toUpperCase());
+  out = out.replace(/([.!?])\s*,/g, "$1").replace(/,\s*,/g, ",").replace(/\s+,/g, ",");
+  out = out.replace(/\bAnd, /g, "And ").replace(/\bBut, /g, "But ");
+  return out.trim();
+}
+
+/* ================= UI wiring ================= */
+const $ = id => document.getElementById(id);
+const inputText = $("inputText"), analyzeBtn = $("analyzeBtn"), wordCountEl = $("wordCount");
+
+function refreshCount() {
+  const n = wordCount(inputText.value);
+  wordCountEl.textContent = n + " word" + (n === 1 ? "" : "s");
+  analyzeBtn.disabled = n < 20;
+  analyzeBtn.textContent = n < 20 ? "Analyze (need 20+ words)" : "Analyze";
+}
+inputText.addEventListener("input", refreshCount);
+
+const dropZone = $("dropZone"), fileInput = $("fileInput");
+dropZone.addEventListener("click", () => fileInput.click());
+["dragover", "dragenter"].forEach(ev => dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.add("border-sky-400"); }));
+["dragleave", "drop"].forEach(ev => dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.remove("border-sky-400"); }));
+dropZone.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) readFile(f); });
+fileInput.addEventListener("change", () => { if (fileInput.files[0]) readFile(fileInput.files[0]); });
+
+async function readFile(file) {
+  const nameEl = $("fileName");
+  nameEl.classList.remove("hidden");
+  try {
+    let text = "";
+    if (file.name.toLowerCase().endsWith(".docx")) {
+      nameEl.textContent = "Reading " + file.name + " …";
+      const buf = await file.arrayBuffer();
+      const res = await mammoth.extractRawText({ arrayBuffer: buf });
+      text = res.value;
+    } else {
+      text = await file.text();
+    }
+    inputText.value = text;
+    nameEl.textContent = "Loaded: " + file.name + " (" + wordCount(text).toLocaleString() + " words)";
+    refreshCount();
+  } catch (err) {
+    nameEl.textContent = "Could not read " + file.name + " — try a .txt or .md file, or paste the text.";
+  }
+}
+
+$("clearBtn").addEventListener("click", () => {
+  inputText.value = ""; $("fileName").classList.add("hidden");
+  $("results").classList.add("hidden"); $("humanizer").classList.add("hidden");
+  refreshCount();
+});
+
+$("sampleBtn").addEventListener("click", () => {
+  inputText.value = "In today's fast-paced world, it is important to note that artificial intelligence plays a crucial role in the ever-evolving landscape of modern business. Furthermore, organizations leverage cutting-edge technology to facilitate seamless operations. Moreover, it is worth noting that a comprehensive approach underscores the significance of robust systems. In conclusion, it is evident that AI is a game-changer. Additionally, the tapestry of innovation continues to expand. As a result, companies must navigate the complexities of this multifaceted environment. Ultimately, harnessing the power of AI will revolutionize the way we work.";
+  refreshCount();
+});
+
+let lastScore = null, lastText = "";
+
+function renderAnalysis(a) {
+  lastScore = a.score; lastText = inputText.value;
+  $("results").classList.remove("hidden");
+  $("humanizer").classList.remove("hidden");
+  $("humanizedWrap").classList.add("hidden");
+  $("copyMsg").classList.add("hidden");
+
+  $("scoreNum").textContent = a.score + "%";
+  const arc = $("gaugeArc");
+  const C = 326.7;
+  arc.style.strokeDashoffset = String(C * (1 - a.score / 100));
+  arc.style.stroke = a.score < 25 ? "#22c55e" : a.score < 50 ? "#eab308" : a.score < 75 ? "#f97316" : "#ef4444";
+
+  const [v, sub] = verdictFor(a.score);
+  $("verdict").textContent = v;
+  $("verdictSub").textContent = sub + " (" + a.words.toLocaleString() + " words, " + a.sentences + " sentences)";
+
+  const factorsEl = $("factors");
+  factorsEl.innerHTML = "";
+  a.factors.forEach(f => {
+    const row = document.createElement("div");
+    row.innerHTML =
+      '<div class="flex justify-between text-sm"><span>' + f.name + '</span><span class="text-gray-400">' + f.detail + ' · ' + f.score + '%</span></div>' +
+      '<div class="h-2 bg-gray-700 rounded-full mt-1"><div class="bar-fill h-2 rounded-full ' + (f.score < 30 ? "bg-emerald-500" : f.score < 60 ? "bg-yellow-500" : "bg-red-500") + '" style="width:' + f.score + '%"></div></div>';
+    factorsEl.appendChild(row);
+  });
+
+  const list = $("phraseList");
+  list.innerHTML = "";
+  const entries = Object.entries(a.found).sort((x, y) => y[1] - x[1]);
+  $("phraseCount").textContent = entries.length ? "(" + a.phraseHits + " total)" : "";
+  $("noPhrases").classList.toggle("hidden", entries.length > 0);
+  entries.forEach(([p, n]) => {
+    const chip = document.createElement("span");
+    chip.className = "text-xs bg-yellow-500/20 text-yellow-200 border border-yellow-500/40 rounded-full px-2.5 py-1";
+    chip.textContent = "“" + p + "” × " + n;
+    list.appendChild(chip);
+  });
+}
+
+analyzeBtn.addEventListener("click", () => renderAnalysis(analyze(inputText.value)));
+
+$("humanizeBtn").addEventListener("click", () => {
+  const original = inputText.value;
+  const out = humanize(original);
+  const before = lastScore !== null && lastText === original ? lastScore : analyze(original).score;
+  const after = analyze(out).score;
+  $("humanizedText").value = out;
+  $("humanizedWrap").classList.remove("hidden");
+  $("newScore").textContent = after + "% AI";
+  const delta = before - after;
+  $("scoreDelta").textContent = delta > 0 ? "↓ down " + delta + " points from " + before + "%" : delta === 0 ? "No change — already reads naturally." : "↑ up " + (-delta) + " points (unusual — check the rewrite)";
+  $("copyMsg").classList.add("hidden");
+});
+
+$("copyBtn").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("humanizedText").value); $("copyMsg").classList.remove("hidden"); }
+  catch (e) { $("humanizedText").select(); document.execCommand("copy"); $("copyMsg").classList.remove("hidden"); }
+});
+
+$("downloadBtn").addEventListener("click", () => {
+  const blob = new Blob([$("humanizedText").value], { type: "text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "humanized.txt";
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+$("useHumanizedBtn").addEventListener("click", () => {
+  inputText.value = $("humanizedText").value;
+  refreshCount();
+  renderAnalysis(analyze(inputText.value));
+  window.scrollTo({ top: $("results").offsetTop - 20, behavior: "smooth" });
+});
+
+refreshCount();
+</script>
+</body>
+</html>
