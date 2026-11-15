@@ -132,8 +132,10 @@ const REPLACEMENTS = [
   [/it should be noted that/gi, ""], [/it is crucial to/gi, "you need to"],
   [/in today's fast-paced world/gi, "These days"],
   [/in the ever-evolving landscape of/gi, "in"], [/in the ever-evolving landscape/gi, "today"],
-  [/plays a crucial role/gi, "is key"], [/crucial role/gi, "key part"],
+  [/landscape of/gi, "world of"], [/realm of/gi, "world of"],
+  [/plays a crucial role/gi, "is key"], [/crucial role/gi, "key part"], [/crucial/gi, "key"],
   [/plays an important role/gi, "matters"], [/important role/gi, "big part"],
+  [/pivotal/gi, "key"], [/vibrant/gi, "lively"], [/bustling/gi, "busy"], [/nestled/gi, "tucked away"],
   [/tapestry/gi, "mix"],
   [/a testament to/gi, "proof of"], [/shed light on/gi, "explain"],
   [/navigate the complexities of/gi, "handle"], [/in summary/gi, "In short"],
@@ -193,31 +195,40 @@ function analyze(text) {
   const total = words.length;
   const lower = " " + text.toLowerCase().replace(/\s+/g, " ") + " ";
 
-  // 1. AI phrase density
+  // 1. AI phrase density — longest phrases first, consume matches so a long
+  // cliché is not also counted via its shorter sub-phrases. Multi-word
+  // clichés count fully; single buzzwords count less (0.4).
   const found = {};
-  let phraseHits = 0;
-  AI_PHRASES.forEach(p => {
-    const re = new RegExp("\\b" + p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "gi");
-    const m = text.match(re);
-    if (m) { found[p] = m.length; phraseHits += m.length; }
+  let effHits = 0;
+  let consumed = " " + text.toLowerCase().replace(/\s+/g, " ") + " ";
+  const sortedPhrases = AI_PHRASES.slice().sort((a, b) => b.length - a.length);
+  sortedPhrases.forEach(p => {
+    const esc = p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp("\\b" + esc + "\\b", "gi");
+    let m, count = 0;
+    while ((m = re.exec(consumed)) !== null) {
+      count++;
+      consumed = consumed.slice(0, m.index) + " ".repeat(m[0].length) + consumed.slice(m.index + m[0].length);
+      re.lastIndex = m.index + m[0].length;
+    }
+    if (count) {
+      found[p] = count;
+      effHits += count * (p.includes(" ") ? 1 : 0.4);
+    }
   });
-  const phraseDensity = total ? phraseHits / total * 1000 : 0; // hits per 1000 words
-  const phraseScore = Math.min(100, phraseDensity * 8);
+  const phraseHits = Object.values(found).reduce((a, b) => a + b, 0);
+  const phraseDensity = total ? effHits / total * 1000 : 0; // weighted hits per 1000 words
+  const phraseScore = Math.min(100, phraseDensity * 3.5);
 
   // 2. Burstiness: coefficient of variation of sentence word counts
   const lens = sentences.map(s => wordsOf(s).length).filter(n => n > 0);
   const mean = lens.length ? lens.reduce((a, b) => a + b, 0) / lens.length : 0;
   const sd = lens.length > 1 ? Math.sqrt(lens.reduce((a, n) => a + (n - mean) ** 2, 0) / lens.length) : 0;
   const cv = mean ? sd / mean : 0;
-  // Human writing usually CV > 0.55; uniform AI text often < 0.45
-  const burstScore = Math.max(0, Math.min(100, (0.62 - cv) / 0.62 * 100));
+  // Human writing usually CV > 0.5; uniform AI text often < 0.4
+  const burstScore = Math.max(0, Math.min(100, (0.55 - cv) / 0.55 * 100));
 
-  // 3. Sentence-length uniformity: share of sentences within ±3 words of the mean
-  // (unreliable on tiny samples — neutral when fewer than 5 sentences)
-  const nearMean = mean ? lens.filter(n => Math.abs(n - mean) <= 3).length / lens.length : 0;
-  const uniformScore = lens.length >= 5 ? Math.round(nearMean * 100) : 40;
-
-  // 4. Lexical diversity (type-token ratio)
+  // 3. Lexical diversity (type-token ratio)
   const unique = new Set(words.map(w => w.toLowerCase().replace(/[^a-z0-9']/g, ""))).size;
   const ttr = total ? unique / total : 0;
   // Very low diversity reads repetitive; very high is human. AI often sits mid-low.
@@ -238,12 +249,11 @@ function analyze(text) {
   const connScore = Math.min(100, connDensity * 25);
 
   const factors = [
-    { name: "AI cliché phrases", score: Math.round(phraseScore), weight: 0.30, detail: phraseHits + " hit" + (phraseHits === 1 ? "" : "s") },
-    { name: "Sentence burstiness", score: Math.round(burstScore), weight: 0.25, detail: "length varies " + (cv < 0.45 ? "very little" : cv < 0.6 ? "a bit" : "naturally") },
-    { name: "Uniform sentence length", score: uniformScore, weight: 0.15, detail: Math.round(nearMean * 100) + "% of sentences near the average length" },
+    { name: "AI cliché phrases", score: Math.round(phraseScore), weight: 0.35, detail: phraseHits + " hit" + (phraseHits === 1 ? "" : "s") },
+    { name: "Sentence burstiness", score: Math.round(burstScore), weight: 0.25, detail: "length varies " + (cv < 0.4 ? "very little" : cv < 0.55 ? "a bit" : "naturally") },
     { name: "Vocabulary diversity", score: Math.round(diversityScore), weight: 0.15, detail: Math.round(ttr * 100) + "% unique words" },
-    { name: "Repetitive sentence starters", score: starterScore, weight: 0.10, detail: "top starter opens " + Math.round(topStarter * 100) + "% of sentences" },
-    { name: "Formal connectors", score: Math.round(connScore), weight: 0.05, detail: connHits + " formal connector" + (connHits === 1 ? "" : "s") }
+    { name: "Repetitive sentence starters", score: starterScore, weight: 0.15, detail: "top starter opens " + Math.round(topStarter * 100) + "% of sentences" },
+    { name: "Formal connectors", score: Math.round(connScore), weight: 0.10, detail: connHits + " formal connector" + (connHits === 1 ? "" : "s") }
   ];
   const totalScore = Math.round(factors.reduce((a, f) => a + f.score * f.weight, 0));
   return { score: totalScore, factors, found, phraseHits, sentences: sentences.length, words: total };
@@ -257,33 +267,108 @@ function verdictFor(score) {
 }
 
 /* ================= Humanizer ================= */
+/* Split one long sentence into two. Only splits that keep both halves as real
+   sentences: independent clauses joined by and/but/so or ";", a bare "that"
+   clause, or a plain comma where neither half is a fragment. */
+const BAD_SPLIT_FIRST = /^(on top of|in the end|in addition|for example|in fact|as a result|that means|what's more|plus|and|but|so|in short|all in all|first|second|third|finally|however|therefore|thus|moreover|furthermore|additionally|overall|ultimately)\b/i;
+const BAD_SPLIT_SECOND = /^(allowing|including|using|based|resulting|leading|making|providing|offering|enabling|helping|giving|leaving|following|according|despite|although|though|because|since|if|when|while|as|which|that|who|whom|whose)\b/i;
+
+function splitSentence(s) {
+  const cap = t => t.charAt(0).toUpperCase() + t.slice(1);
+  const trySplit = (first, second) => {
+    first = first.trim(); second = second.trim();
+    if (wordsOf(first).length < 6 || wordsOf(second).length < 4) return null;
+    if (BAD_SPLIT_FIRST.test(first) || BAD_SPLIT_SECOND.test(second)) return null;
+    return { first, second, diff: Math.abs(wordsOf(first).length - wordsOf(second).length) };
+  };
+  const pick = list => {
+    if (!list.length) return null;
+    list.sort((a, b) => b.diff - a.diff);
+    const b = list[0];
+    return [b.first.replace(/[.!?]$/, "") + ".", cap(b.second)];
+  };
+  // 1. ", and" / ", but" / ", so" / ";"
+  let list = [], m;
+  const re1 = /,\s*(and|but|so)\s+|;\s+/g;
+  while ((m = re1.exec(s)) !== null) {
+    const c = trySplit(s.slice(0, m.index), s.slice(m.index + m[0].length));
+    if (c) list.push(c);
+  }
+  let r = pick(list);
+  if (r) return r;
+  // 2. bare " that " — second half starts with the demonstrative "That"
+  list = [];
+  const re2 = /\s+that\s+/g;
+  while ((m = re2.exec(s)) !== null) {
+    const c = trySplit(s.slice(0, m.index), "that " + s.slice(m.index + m[0].length));
+    if (c) list.push(c);
+  }
+  r = pick(list);
+  if (r) return r;
+  // 3. plain comma
+  list = [];
+  const re3 = /,\s+/g;
+  while ((m = re3.exec(s)) !== null) {
+    const c = trySplit(s.slice(0, m.index), s.slice(m.index + m[0].length));
+    if (c) list.push(c);
+  }
+  return pick(list);
+}
+
+/* Burstiness = coefficient of variation of sentence word counts. */
+function burstinessCV(sents) {
+  const ls = sents.map(s => wordsOf(s).length).filter(n => n > 0);
+  if (ls.length < 2) return 0;
+  const mean = ls.reduce((x, y) => x + y, 0) / ls.length;
+  const sd = Math.sqrt(ls.reduce((x, n) => x + (n - mean) ** 2, 0) / ls.length);
+  return mean ? sd / mean : 0;
+}
+
+/* Split the longest sentences until their lengths vary like human writing
+   (CV >= 0.55). Splitting (not merging) is what creates real variance. */
+function varyLengths(sents) {
+  const arr = sents.slice();
+  let guard = 0;
+  while (burstinessCV(arr) < 0.55 && guard++ < 20) {
+    const ls = arr.map(s => wordsOf(s).length);
+    const maxI = ls.indexOf(Math.max(...ls));
+    if (ls[maxI] < 12) break; // nothing long enough to split usefully
+    const sp = splitSentence(arr[maxI]);
+    if (sp) { arr.splice(maxI, 1, ...sp); continue; }
+    break;
+  }
+  return arr;
+}
+
 function humanize(text) {
   let out = text;
   REPLACEMENTS.forEach(([re, rep]) => { out = out.replace(re, rep); });
   // Trim filler openers left behind
   out = out.replace(/^\s*(note that|so,?)\s+/gim, "");
-  // Split very long sentences at a comma + conjunction
-  const parts = out.split(/(?<=[.!?])\s+/);
-  const rebuilt = parts.map(s => {
-    const w = wordsOf(s);
-    if (w.length > 30) {
-      const m = s.match(/^(.*?), (and|but|which|while|so) (.*)$/);
-      if (m) {
-        let second = m[3].trim();
-        second = second.charAt(0).toUpperCase() + second.slice(1);
-        return m[1].trim() + ". " + second;
-      }
-    }
-    return s;
-  });
-  out = rebuilt.join(" ");
-  // Clean up double spaces, stray punctuation, and re-capitalize sentence starts
+  // Restructure sentence lengths for human-like burstiness
+  let sents = splitSentences(out).map(s => s.trim()).filter(Boolean);
+  sents = varyLengths(sents);
+  out = sents.join(" ");
+  // Clean up stray punctuation FIRST, then re-capitalize sentence starts
   out = out.replace(/ {2,}/g, " ").replace(/\s+([,.!?])/g, "$1").replace(/\. \./g, ".");
+  out = out.replace(/([.!?])\s*,/g, "$1").replace(/,\s*,/g, ",").replace(/\s+,/g, ",");
   out = out.replace(/([.!?]\s+)([a-z])/g, (m, p, c) => p + c.toUpperCase());
   out = out.replace(/^[a-z]/, c => c.toUpperCase());
-  out = out.replace(/([.!?])\s*,/g, "$1").replace(/,\s*,/g, ",").replace(/\s+,/g, ",");
   out = out.replace(/\bAnd, /g, "And ").replace(/\bBut, /g, "But ");
   return out.trim();
+}
+
+/* Humanize repeatedly (up to 3 passes) and keep the lowest-scoring version. */
+function humanizeBest(text) {
+  let best = humanize(text);
+  let bestScore = analyze(best).score;
+  for (let i = 0; i < 2 && bestScore > 12; i++) {
+    const next = humanize(best);
+    const s = analyze(next).score;
+    if (s < bestScore) { best = next; bestScore = s; }
+    else break;
+  }
+  return { text: best, score: bestScore };
 }
 
 /* ================= UI wiring ================= */
@@ -383,9 +468,8 @@ analyzeBtn.addEventListener("click", () => renderAnalysis(analyze(inputText.valu
 
 $("humanizeBtn").addEventListener("click", () => {
   const original = inputText.value;
-  const out = humanize(original);
   const before = lastScore !== null && lastText === original ? lastScore : analyze(original).score;
-  const after = analyze(out).score;
+  const { text: out, score: after } = humanizeBest(original);
   $("humanizedText").value = out;
   $("humanizedWrap").classList.remove("hidden");
   $("newScore").textContent = after + "% AI";
