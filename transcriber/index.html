@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MP3 to Text Transcriber — Whisper in your browser</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .bar-fill { transition: width 0.3s ease; }
+  .seg { cursor: pointer; }
+  .seg:hover { background: rgba(56, 189, 248, 0.12); }
+  .seg.active { background: rgba(56, 189, 248, 0.2); }
+  textarea { scrollbar-width: thin; }
+</style>
+</head>
+<body class="bg-gray-800 text-white min-h-screen">
+<div class="max-w-4xl mx-auto px-4 py-8">
+
+  <!-- Header -->
+  <header class="mb-6">
+    <div class="flex items-center gap-3 flex-wrap">
+      <h1 class="text-3xl font-bold">MP3 to Text Transcriber</h1>
+      <span class="text-xs bg-gray-700 text-gray-300 rounded-full px-2.5 py-1">runs 100% in your browser — nothing is uploaded</span>
+    </div>
+    <p class="text-gray-300 mt-2">Upload an MP3 (or WAV, M4A, OGG, FLAC) and get a transcript with timestamps, powered by OpenAI Whisper running locally in your browser. English and Chinese supported, plus auto-detect.</p>
+    <p class="text-gray-400 text-sm mt-1">No server, no API key. The first run downloads the Whisper model (75–500&nbsp;MB depending on size) and caches it in your browser, so later runs start instantly.</p>
+    <a href="https://shengkae.github.io/" class="text-sm text-sky-400 hover:text-sky-300 underline">← Back to all tools</a>
+  </header>
+
+  <!-- Input -->
+  <section class="bg-gray-900 rounded-xl p-5 shadow-lg">
+    <div id="dropZone" class="border-2 border-dashed border-gray-600 rounded-lg p-6 text-center cursor-pointer hover:border-sky-400 transition-colors">
+      <p class="text-lg">Drop an audio file here, or <span class="text-sky-400 underline">browse</span></p>
+      <p class="text-gray-400 text-sm mt-1">MP3, WAV, M4A, OGG, FLAC, WebM — works best for clips a few minutes long</p>
+      <input id="fileInput" type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.webm,.mp4" class="hidden" />
+      <p id="fileName" class="text-sm text-emerald-400 mt-2 hidden"></p>
+    </div>
+
+    <div id="audioWrap" class="hidden mt-4">
+      <audio id="audioPlayer" controls class="w-full"></audio>
+      <p id="audioInfo" class="text-gray-400 text-sm mt-2"></p>
+    </div>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+      <div>
+        <label class="block text-sm text-gray-300 mb-1" for="langSelect">Language</label>
+        <select id="langSelect" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-400">
+          <option value="auto" selected>Auto-detect</option>
+          <option value="english">English</option>
+          <option value="chinese">中文 (Chinese)</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm text-gray-300 mb-1" for="modelSelect">Model</label>
+        <select id="modelSelect" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-400">
+          <option value="onnx-community/whisper-tiny" selected>Tiny — fastest (~75 MB)</option>
+          <option value="onnx-community/whisper-base">Base — balanced (~150 MB)</option>
+          <option value="onnx-community/whisper-small">Small — most accurate (~500 MB)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="flex items-center gap-3 mt-4 flex-wrap">
+      <button id="transcribeBtn" class="bg-sky-500 hover:bg-sky-400 text-white font-semibold px-5 py-2 rounded-lg disabled:opacity-40" disabled>Transcribe</button>
+      <button id="sampleBtn" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">Try a sample (JFK, English)</button>
+      <button id="clearBtn" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">Clear</button>
+      <span id="modelStatus" class="text-gray-400 text-sm ml-auto"></span>
+    </div>
+
+    <!-- Progress -->
+    <div id="progressWrap" class="hidden mt-4">
+      <div class="flex justify-between text-sm mb-1">
+        <span id="progressLabel" class="text-gray-300">Loading model…</span>
+        <span id="progressPct" class="text-gray-400">0%</span>
+      </div>
+      <div class="w-full bg-gray-700 rounded-full h-2.5 overflow-hidden">
+        <div id="progressBar" class="bar-fill bg-sky-500 h-2.5 rounded-full" style="width: 0%"></div>
+      </div>
+      <p id="progressDetail" class="text-gray-500 text-xs mt-1"></p>
+    </div>
+    <p id="errorMsg" class="text-red-400 text-sm mt-3 hidden"></p>
+  </section>
+
+  <!-- Results -->
+  <section id="results" class="hidden mt-6 bg-gray-900 rounded-xl p-5 shadow-lg">
+    <h2 class="text-xl font-semibold mb-1">Transcript</h2>
+    <p id="resultMeta" class="text-gray-400 text-sm mb-4"></p>
+    <div id="segments" class="space-y-1 max-h-96 overflow-y-auto pr-1"></div>
+    <textarea id="transcriptText" rows="8" readonly class="w-full mt-4 bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm resize-y"></textarea>
+    <div class="flex gap-3 mt-3 flex-wrap">
+      <button id="copyBtn" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">Copy transcript</button>
+      <button id="downloadTxtBtn" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">Download .txt</button>
+      <button id="downloadSrtBtn" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">Download .srt</button>
+      <button id="downloadVttBtn" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">Download .vtt</button>
+    </div>
+    <p id="copyMsg" class="text-emerald-400 text-sm mt-2 hidden">Copied to clipboard.</p>
+  </section>
+
+  <footer class="text-gray-500 text-xs mt-8 text-center">
+    Whisper runs locally via Transformers.js (ONNX Runtime). Audio never leaves your browser. For hour-long recordings or bulk files, use a hosted transcription service instead.
+  </footer>
+</div>
+
+<script type="module">
+/* ================= Worker (runs Whisper off the main thread) ================= */
+const workerCode = `
+import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6';
+env.allowLocalModels = false;
+let transcriber = null;
+let currentModel = null;
+let currentDevice = null;
+
+async function loadModel(model, wantWebGpu) {
+  if (transcriber && currentModel === model) return;
+  const devices = wantWebGpu ? ['webgpu', 'wasm'] : ['wasm'];
+  let lastErr = null;
+  for (const device of devices) {
+    try {
+      transcriber = await pipeline('automatic-speech-recognition', model, {
+        device: device,
+        dtype: 'q8',
+        progress_callback: function (p) { self.postMessage({ type: 'progress', device: device, status: p.status, file: p.file || '', progress: p.progress || 0, loaded: p.loaded || 0, total: p.total || 0 }); },
+      });
+      currentModel = model;
+      currentDevice = device;
+      return;
+    } catch (err) {
+      lastErr = err;
+      transcriber = null;
+    }
+  }
+  throw lastErr || new Error('Could not load the model.');
+}
+
+self.onmessage = async function (e) {
+  const data = e.data || {};
+  if (data.type === 'load') {
+    try {
+      await loadModel(data.model, !!data.webgpu);
+      self.postMessage({ type: 'loaded', model: currentModel, device: currentDevice });
+    } catch (err) {
+      self.postMessage({ type: 'error', message: String((err && err.message) || err) });
+    }
+    return;
+  }
+  if (data.type === 'transcribe') {
+    try {
+      if (!transcriber) await loadModel(data.model, !!data.webgpu);
+      const opts = { chunk_length_s: 30, stride_length_s: 5, return_timestamps: true, task: 'transcribe' };
+      if (data.language && data.language !== 'auto') opts.language = data.language;
+      const out = await transcriber(data.audio, opts);
+      self.postMessage({ type: 'result', text: out.text || '', chunks: out.chunks || [] });
+    } catch (err) {
+      self.postMessage({ type: 'error', message: String((err && err.message) || err) });
+    }
+  }
+};
+`;
+
+let worker = null;
+let workerReady = false;
+function makeWorker() {
+  try {
+    const blob = new Blob([workerCode], { type: 'text/javascript' });
+    const url = URL.createObjectURL(blob);
+    worker = new Worker(url, { type: 'module' });
+    workerReady = true;
+    worker.onmessage = onWorkerMessage;
+    worker.onerror = (ev) => showError('Transcription worker failed to start: ' + (ev.message || 'unknown error') + '. Try reloading the page, or use Chrome / Edge.');
+  } catch (err) {
+    workerReady = false;
+    showError('Could not start the transcription worker in this browser: ' + err.message + '. Try Chrome or Edge.');
+  }
+}
+
+/* ================= State ================= */
+const $ = id => document.getElementById(id);
+const dropZone = $("dropZone"), fileInput = $("fileInput"), fileNameEl = $("fileName");
+const audioWrap = $("audioWrap"), audioPlayer = $("audioPlayer"), audioInfo = $("audioInfo");
+const langSelect = $("langSelect"), modelSelect = $("modelSelect");
+const transcribeBtn = $("transcribeBtn"), sampleBtn = $("sampleBtn"), clearBtn = $("clearBtn");
+const modelStatus = $("modelStatus");
+const progressWrap = $("progressWrap"), progressLabel = $("progressLabel"), progressPct = $("progressPct");
+const progressBar = $("progressBar"), progressDetail = $("progressDetail");
+const errorMsg = $("errorMsg");
+const resultsSec = $("results"), resultMeta = $("resultMeta"), segmentsEl = $("segments");
+const transcriptText = $("transcriptText");
+const copyBtn = $("copyBtn"), downloadTxtBtn = $("downloadTxtBtn");
+const downloadSrtBtn = $("downloadSrtBtn"), downloadVttBtn = $("downloadVttBtn");
+const copyMsg = $("copyMsg");
+
+let currentFile = null;       // File or Blob
+let currentFileName = "";
+let audioData = null;         // Float32Array at 16 kHz mono
+let audioDuration = 0;
+let modelLoaded = null;       // model id currently loaded in the worker
+let modelDevice = "";
+let lastChunks = [];
+let lastText = "";
+let busy = false;
+
+const MODEL_SIZE = {
+  "onnx-community/whisper-tiny": "~75 MB",
+  "onnx-community/whisper-base": "~150 MB",
+  "onnx-community/whisper-small": "~500 MB",
+};
+const webgpuAvailable = typeof navigator !== 'undefined' && !!navigator.gpu;
+
+function fmtTime(s) {
+  if (!isFinite(s) || s == null) s = 0;
+  const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+  return String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
+}
+function fmtBytes(n) {
+  if (!n) return "";
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + " MB";
+  if (n >= 1024) return (n / 1024).toFixed(0) + " KB";
+  return n + " B";
+}
+function showError(msg) {
+  errorMsg.textContent = msg;
+  errorMsg.classList.remove("hidden");
+}
+function clearError() { errorMsg.classList.add("hidden"); errorMsg.textContent = ""; }
+function setProgress(label, pct, detail) {
+  progressWrap.classList.remove("hidden");
+  progressLabel.textContent = label;
+  progressPct.textContent = Math.round(pct) + "%";
+  progressBar.style.width = Math.max(0, Math.min(100, pct)) + "%";
+  progressDetail.textContent = detail || "";
+}
+function hideProgress() { progressWrap.classList.add("hidden"); }
+
+function setBusy(b) {
+  busy = b;
+  transcribeBtn.disabled = b || !audioData;
+  sampleBtn.disabled = b;
+  modelSelect.disabled = b;
+  langSelect.disabled = b;
+}
+
+/* ================= Audio decoding (to 16 kHz mono) ================= */
+async function decodeTo16kMono(file) {
+  const buf = await file.arrayBuffer();
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const decoded = await ctx.decodeAudioData(buf);
+  await ctx.close();
+  const targetLen = Math.max(1, Math.ceil(decoded.duration * 16000));
+  const offline = new OfflineAudioContext(1, targetLen, 16000);
+  const src = offline.createBufferSource();
+  src.buffer = decoded;
+  src.connect(offline.destination);
+  src.start(0);
+  const rendered = await offline.startRendering();
+  return { data: Float32Array.from(rendered.getChannelData(0)), duration: decoded.duration };
+}
+
+/* ================= File handling ================= */
+function resetResults() {
+  resultsSec.classList.add("hidden");
+  lastChunks = []; lastText = "";
+  segmentsEl.innerHTML = ""; transcriptText.value = "";
+}
+
+async function handleFile(file) {
+  clearError();
+  resetResults();
+  currentFile = file;
+  currentFileName = file.name || "audio";
+  fileNameEl.textContent = "Loaded: " + currentFileName + " (" + fmtBytes(file.size) + ")";
+  fileNameEl.classList.remove("hidden");
+  audioWrap.classList.remove("hidden");
+  audioPlayer.src = URL.createObjectURL(file);
+  audioInfo.textContent = "Decoding audio…";
+  transcribeBtn.disabled = true;
+  try {
+    const r = await decodeTo16kMono(file);
+    audioData = r.data;
+    audioDuration = r.duration;
+    audioInfo.textContent = "Duration " + fmtTime(audioDuration) + " · " + fmtBytes(file.size) + " · decoded to 16 kHz mono for Whisper";
+    transcribeBtn.disabled = false;
+    if (modelLoaded) modelStatus.textContent = "Model ready: " + shortModel(modelLoaded) + (modelDevice ? " (" + modelDevice + ")" : "");
+  } catch (err) {
+    audioData = null;
+    audioInfo.textContent = "";
+    showError("Could not decode this file: " + (err.message || err) + ". Try an MP3 or WAV file.");
+  }
+}
+
+function shortModel(id) { return (id || "").split("/").pop(); }
+
+dropZone.addEventListener("click", () => fileInput.click());
+["dragover", "dragenter"].forEach(ev => dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.add("border-sky-400"); }));
+["dragleave", "drop"].forEach(ev => dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.remove("border-sky-400"); }));
+dropZone.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) handleFile(f); });
+fileInput.addEventListener("change", () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
+
+clearBtn.addEventListener("click", () => {
+  currentFile = null; currentFileName = ""; audioData = null; audioDuration = 0;
+  fileInput.value = "";
+  fileNameEl.classList.add("hidden");
+  audioWrap.classList.add("hidden");
+  audioPlayer.removeAttribute("src");
+  audioInfo.textContent = "";
+  transcribeBtn.disabled = true;
+  hideProgress();
+  clearError();
+  resetResults();
+  modelStatus.textContent = modelLoaded ? "Model ready: " + shortModel(modelLoaded) : "";
+});
+
+sampleBtn.addEventListener("click", async () => {
+  clearError();
+  sampleBtn.disabled = true;
+  sampleBtn.textContent = "Loading sample…";
+  try {
+    const res = await fetch("https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/jfk.wav");
+    if (!res.ok) throw new Error("sample download failed (HTTP " + res.status + ")");
+    const blob = await res.blob();
+    const file = new File([blob], "jfk-sample.wav", { type: "audio/wav" });
+    await handleFile(file);
+  } catch (err) {
+    showError("Could not load the sample: " + err.message);
+  } finally {
+    sampleBtn.disabled = false;
+    sampleBtn.textContent = "Try a sample (JFK, English)";
+  }
+});
+
+/* ================= Worker messages ================= */
+let pendingResolve = null;
+function onWorkerMessage(e) {
+  const d = e.data || {};
+  if (d.type === "progress") {
+    const pct = d.total ? (d.loaded / d.total) * 100 : (d.progress || 0) * 100;
+    const label = d.status === "downloading" || d.status === "download"
+      ? "Downloading model" + (d.file ? " — " + d.file.split("/").pop() : "") + (d.device ? " (" + d.device + ")" : "")
+      : "Loading model…";
+    setProgress(label, pct, d.total ? fmtBytes(d.loaded) + " / " + fmtBytes(d.total) : "");
+    return;
+  }
+  if (d.type === "loaded") {
+    modelLoaded = d.model;
+    modelDevice = d.device || "";
+    modelStatus.textContent = "Model ready: " + shortModel(modelLoaded) + (modelDevice ? " (" + modelDevice + ")" : "");
+    hideProgress();
+    if (pendingResolve) { const r = pendingResolve; pendingResolve = null; r(); }
+    return;
+  }
+  if (d.type === "result") {
+    hideProgress();
+    setBusy(false);
+    showResults(d.text, d.chunks || []);
+    if (pendingResolve) { const r = pendingResolve; pendingResolve = null; r(); }
+    return;
+  }
+  if (d.type === "error") {
+    hideProgress();
+    setBusy(false);
+    showError(d.message || "Transcription failed.");
+    if (pendingResolve) { const r = pendingResolve; pendingResolve = null; r(); }
+  }
+}
+
+function waitForWorker() {
+  return new Promise((resolve) => { pendingResolve = resolve; });
+}
+
+transcribeBtn.addEventListener("click", async () => {
+  if (!audioData || busy) return;
+  if (!workerReady) { showError("The transcription worker did not start. Try reloading the page in Chrome or Edge."); return; }
+  clearError();
+  resetResults();
+  setBusy(true);
+  const model = modelSelect.value;
+  const language = langSelect.value;
+  // Load the model first if needed
+  if (modelLoaded !== model) {
+    setProgress("Downloading model — " + shortModel(model) + " (" + (MODEL_SIZE[model] || "") + ")", 0, "First run downloads the model; it is cached in your browser afterwards.");
+    worker.postMessage({ type: "load", model: model, webgpu: webgpuAvailable });
+    await waitForWorker();
+    if (modelLoaded !== model) { setBusy(false); return; } // load failed, error already shown
+  }
+  // Transcribe — transfer the audio buffer to the worker (zero-copy)
+  setProgress("Transcribing…", 0, "Whisper is listening to " + fmtTime(audioDuration) + " of audio. This runs on your device and can take a while for long files.");
+  // Fake progress while the worker runs (it reports no per-chunk progress)
+  let fakePct = 0;
+  const tick = setInterval(() => {
+    fakePct = Math.min(90, fakePct + 2);
+    setProgress("Transcribing…", fakePct, "Whisper is listening to " + fmtTime(audioDuration) + " of audio.");
+  }, 1000);
+  const audioCopy = audioData.slice();
+  worker.postMessage({ type: "transcribe", audio: audioCopy, model: model, language: language, webgpu: webgpuAvailable }, [audioCopy.buffer]);
+  await waitForWorker();
+  clearInterval(tick);
+});
+
+/* ================= Results ================= */
+function srtTime(s) {
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60), ms = Math.floor((s % 1) * 1000);
+  return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0") + "," + String(ms).padStart(3, "0");
+}
+function vttTime(s) {
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60), ms = Math.floor((s % 1) * 1000);
+  return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0") + "." + String(ms).padStart(3, "0");
+}
+
+function showResults(text, chunks) {
+  lastText = (text || "").trim();
+  lastChunks = (chunks || []).filter(c => c && c.text && c.text.trim()).map(c => ({
+    start: c.timestamp ? (c.timestamp[0] || 0) : 0,
+    end: c.timestamp ? (c.timestamp[1] || 0) : 0,
+    text: c.text.trim(),
+  }));
+  const langLabel = langSelect.value === "auto" ? "Auto-detect" : (langSelect.value === "chinese" ? "中文" : "English");
+  resultMeta.textContent = (currentFileName ? currentFileName + " · " : "") + fmtTime(audioDuration) + " · " + langLabel + " · " + shortModel(modelLoaded) + (modelDevice ? " (" + modelDevice + ")" : "") + " · " + lastChunks.length + " segments";
+  segmentsEl.innerHTML = "";
+  if (lastChunks.length) {
+    lastChunks.forEach((c, i) => {
+      const row = document.createElement("div");
+      row.className = "seg flex gap-3 px-2 py-1.5 rounded-lg";
+      row.innerHTML = '<span class="text-sky-400 text-sm shrink-0 font-mono">' + fmtTime(c.start) + '</span><span class="text-sm">' + escapeHtml(c.text) + '</span>';
+      row.addEventListener("click", () => {
+        audioPlayer.currentTime = Math.max(0, c.start);
+        audioPlayer.play();
+        segmentsEl.querySelectorAll(".seg").forEach(el => el.classList.remove("active"));
+        row.classList.add("active");
+      });
+      segmentsEl.appendChild(row);
+    });
+  }
+  transcriptText.value = lastText;
+  resultsSec.classList.remove("hidden");
+  resultsSec.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function downloadFile(name, content, mime) {
+  const blob = new Blob([content], { type: mime || "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function baseName() {
+  return (currentFileName || "transcript").replace(/\.[^.]+$/, "") || "transcript";
+}
+copyBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(transcriptText.value);
+    copyMsg.classList.remove("hidden");
+    setTimeout(() => copyMsg.classList.add("hidden"), 2000);
+  } catch (err) { showError("Could not copy: " + err.message); }
+});
+downloadTxtBtn.addEventListener("click", () => downloadFile(baseName() + ".txt", transcriptText.value));
+downloadSrtBtn.addEventListener("click", () => {
+  const srt = lastChunks.map((c, i) => (i + 1) + "\n" + srtTime(c.start) + " --> " + srtTime(c.end) + "\n" + c.text).join("\n\n");
+  downloadFile(baseName() + ".srt", srt || transcriptText.value);
+});
+downloadVttBtn.addEventListener("click", () => {
+  const vtt = "WEBVTT\n\n" + lastChunks.map(c => vttTime(c.start) + " --> " + vttTime(c.end) + "\n" + c.text).join("\n\n");
+  downloadFile(baseName() + ".vtt", vtt || transcriptText.value);
+});
+
+// Highlight the segment currently playing
+audioPlayer.addEventListener("timeupdate", () => {
+  const t = audioPlayer.currentTime;
+  const rows = segmentsEl.querySelectorAll(".seg");
+  rows.forEach((row, i) => {
+    const c = lastChunks[i];
+    row.classList.toggle("active", !!c && t >= c.start && t < c.end);
+  });
+});
+
+makeWorker();
+if (!webgpuAvailable) modelStatus.textContent = "WebGPU not detected — will run on WASM (slower). Chrome / Edge recommended.";
+</script>
+</body>
+</html>
