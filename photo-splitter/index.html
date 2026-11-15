@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
+<meta http-equiv="Expires" content="0" />
+<title>Photo Splitter — 照片自動分割</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+// 自動更新：檢查是否有新版本，有的話重新載入最新版（網址保持不變，不用加版本號）
+(function () {
+  var VER = "202611152200";
+  try {
+    if (location.search.indexOf("v=") !== -1 && history.replaceState) history.replaceState(null, "", location.pathname);
+    var done = sessionStorage.getItem("ps-updated-to");
+    fetch("version.json?t=" + Date.now(), { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.v && d.v !== VER && done !== d.v) {
+          sessionStorage.setItem("ps-updated-to", d.v);
+          location.href = location.pathname + "?v=" + d.v;
+        }
+      })
+      .catch(function () {});
+  } catch (e) {}
+})();
+</script>
+<style>
+body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans TC", sans-serif; }
+input, select, textarea { color-scheme: dark; }
+canvas { max-width: 100%; }
+.thumb-card.selected { outline: 2px solid #38bdf8; }
+</style>
+</head>
+<body class="bg-gray-800 text-white min-h-screen">
+<div class="max-w-4xl mx-auto px-4 py-8">
+
+<header class="mb-6">
+<div class="flex items-center gap-3 flex-wrap">
+<h1 class="text-3xl font-bold">✂️ Photo Splitter</h1>
+<span class="text-xs bg-gray-700 text-gray-300 rounded-full px-2.5 py-1">照片自動分割</span>
+<span class="text-xs bg-gray-700 text-gray-300 rounded-full px-2.5 py-1">100% 在瀏覽器執行 · 影像不上傳</span>
+</div>
+<p class="text-gray-300 mt-2">像 AutoSplitter 一樣：上傳一張掃描圖（一次放多張照片的那種），自動偵測每張照片的位置並切成獨立檔案；也可以用格狀或等分方式切割。切好後可逐張下載，或一次打包成 ZIP。</p>
+<a href="https://shengkae.github.io/" class="text-sm text-sky-400 hover:text-sky-300 underline">← Back to all tools</a>
+</header>
+
+<!-- Upload -->
+<section class="bg-gray-900 rounded-xl p-5 shadow-lg mb-6">
+<h2 class="text-lg font-semibold mb-3">📤 上傳照片</h2>
+<div id="dropZone" class="border-2 border-dashed border-gray-600 rounded-lg p-6 text-center cursor-pointer hover:border-sky-400 transition-colors">
+<p class="text-lg">拖放圖片到這裡，或 <span class="text-sky-400 underline">點此選擇</span></p>
+<p class="text-gray-400 text-sm mt-1">JPG / PNG / WebP，可一次選多張；也可以直接貼上（Ctrl+V）。上傳後自動開始偵測與切割。</p>
+<input id="fileInput" type="file" accept="image/*" multiple class="hidden" />
+<p id="fileName" class="text-sm text-emerald-400 mt-2 hidden"></p>
+</div>
+<div id="sourceBar" class="hidden mt-3 flex gap-2 items-center flex-wrap">
+<label class="text-sm text-gray-300">預覽來源：</label>
+<select id="sourceSelect" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-400"></select>
+<span id="sourceInfo" class="text-sm text-gray-400"></span>
+</div>
+<p id="errorMsg" class="text-red-400 text-sm mt-3 hidden"></p>
+<p id="statusMsg" class="text-emerald-400 text-sm mt-3 hidden"></p>
+</section>
+
+<!-- Settings -->
+<section class="bg-gray-900 rounded-xl p-5 shadow-lg mb-6">
+<h2 class="text-lg font-semibold mb-3">⚙️ 切割設定</h2>
+<div class="space-y-4">
+<div>
+<label class="block text-sm text-gray-300 mb-2">切割方式</label>
+<div class="flex gap-4 flex-wrap text-sm">
+<label><input type="radio" name="splitMode" value="auto" checked class="mr-1" />🔍 自動偵測照片（掃描多張照片時用）</label>
+<label><input type="radio" name="splitMode" value="grid" class="mr-1" />▦ 格狀切割</label>
+<label><input type="radio" name="splitMode" value="h" class="mr-1" />➖ 橫向等分</label>
+<label><input type="radio" name="splitMode" value="v" class="mr-1" />↕️ 縱向等分</label>
+</div>
+</div>
+<div id="autoSettings" class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+<div>
+<label class="block text-sm text-gray-300 mb-1">偵測靈敏度：<span id="sensVal" class="text-sky-400">60</span></label>
+<input id="sensRange" type="range" min="1" max="100" value="60" class="w-full" />
+<p class="text-gray-500 text-xs mt-1">越高越容易把淺色區域也當成照片；太高會把背景雜點也切出來。</p>
+</div>
+<div>
+<label class="block text-sm text-gray-300 mb-1">最小照片尺寸：<span id="minSizeVal" class="text-sky-400">0.5%</span></label>
+<input id="minSizeRange" type="range" min="1" max="100" value="5" class="w-full" />
+<p class="text-gray-500 text-xs mt-1">小於這個面積的區域會被忽略（去掉雜點）。</p>
+</div>
+<div>
+<label class="block text-sm text-gray-300 mb-1">邊緣留白：<span id="padVal" class="text-sky-400">6 px</span></label>
+<input id="padRange" type="range" min="0" max="40" value="6" class="w-full" />
+<p class="text-gray-500 text-xs mt-1">每張切出來的照片外圍多留一點邊。</p>
+</div>
+</div>
+<div id="gridSettings" class="hidden grid grid-cols-2 sm:grid-cols-4 gap-4">
+<div>
+<label class="block text-sm text-gray-300 mb-1">列數（rows）</label>
+<input id="gridRows" type="number" min="1" max="20" value="2" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm" />
+</div>
+<div>
+<label class="block text-sm text-gray-300 mb-1">欄數（cols）</label>
+<input id="gridCols" type="number" min="1" max="20" value="2" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm" />
+</div>
+</div>
+<div id="stripSettings" class="hidden">
+<label class="block text-sm text-gray-300 mb-1">切成幾等分：<span id="stripVal" class="text-sky-400">2</span></label>
+<input id="stripCount" type="range" min="2" max="12" value="2" class="w-full max-w-xs" />
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+<div>
+<label class="block text-sm text-gray-300 mb-1">輸出格式</label>
+<div class="flex gap-4 text-sm">
+<label><input type="radio" name="outFmt" value="png" checked class="mr-1" />PNG（無損）</label>
+<label><input type="radio" name="outFmt" value="jpeg" class="mr-1" />JPG（較小）</label>
+</div>
+</div>
+<div id="jpgQWrap" class="hidden">
+<label class="block text-sm text-gray-300 mb-1">JPG 品質：<span id="jpgQVal" class="text-sky-400">92</span></label>
+<input id="jpgQ" type="range" min="50" max="100" value="92" class="w-full" />
+</div>
+<div>
+<label class="block text-sm text-gray-300 mb-1">色彩還原（舊照片）</label>
+<label class="text-sm"><input id="enhanceChk" type="checkbox" class="mr-1" />✨ 自動增強對比與飽和度</label>
+</div>
+</div>
+<div class="flex gap-3 flex-wrap">
+<button id="processBtn" class="bg-sky-500 hover:bg-sky-400 px-5 py-2 rounded-lg text-sm font-semibold disabled:opacity-40" disabled>✂️ 重新切割</button>
+<button id="clearBtn" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">清除全部</button>
+</div>
+</div>
+</section>
+
+<!-- Preview -->
+<section id="previewSec" class="hidden bg-gray-900 rounded-xl p-5 shadow-lg mb-6">
+<h2 class="text-lg font-semibold mb-1">🔍 偵測預覽 <span id="boxCount" class="text-sm text-gray-400 font-normal"></span></h2>
+<p class="text-gray-400 text-sm mb-3">綠框是會切出來的照片，點一下框可以取消 / 恢復該張（取消的不會下載）。</p>
+<div class="overflow-auto bg-gray-800 rounded-lg p-2">
+<canvas id="previewCanvas" class="cursor-pointer mx-auto block"></canvas>
+</div>
+</section>
+
+<!-- Results -->
+<section id="resultsSec" class="hidden bg-gray-900 rounded-xl p-5 shadow-lg mb-6">
+<div class="flex justify-between items-center flex-wrap gap-2 mb-3">
+<h2 class="text-lg font-semibold">🖼️ 切割結果 <span id="resultCount" class="text-sm text-gray-400 font-normal"></span></h2>
+<div class="flex gap-2 flex-wrap">
+<button id="downloadSelBtn" class="bg-sky-500 hover:bg-sky-400 px-4 py-2 rounded-lg text-sm font-semibold disabled:opacity-40" disabled>⬇️ 下載選取的</button>
+<button id="downloadZipBtn" class="bg-emerald-500 hover:bg-emerald-400 px-4 py-2 rounded-lg text-sm font-semibold disabled:opacity-40" disabled>📦 全部打包成 ZIP 下載</button>
+</div>
+</div>
+<div id="resultsGrid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3"></div>
+<p id="zipMsg" class="text-sm text-gray-400 mt-3 hidden"></p>
+</section>
+
+</div>
+
+<script>
+/* ================= State ================= */
+const $ = id => document.getElementById(id);
+let sources = []; // {id, name, img, width, height, boxes: [{x,y,w,h,selected}]}
+let currentSrcId = null;
+let pieceSeq = 0;
+
+function showError(msg) { const el = $("errorMsg"); el.textContent = msg; el.classList.remove("hidden"); }
+function clearError() { $("errorMsg").classList.add("hidden"); $("errorMsg").textContent = ""; }
+function showStatus(msg) { const el = $("statusMsg"); el.textContent = msg; el.classList.remove("hidden"); }
+function clearStatus() { $("statusMsg").classList.add("hidden"); }
+
+/* ================= Upload ================= */
+const dropZone = $("dropZone"), fileInput = $("fileInput");
+dropZone.addEventListener("click", () => fileInput.click());
+["dragover", "dragenter"].forEach(ev => dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.add("border-sky-400"); }));
+["dragleave", "drop"].forEach(ev => dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.remove("border-sky-400"); }));
+dropZone.addEventListener("drop", e => { const fs = [...e.dataTransfer.files].filter(f => f.type.startsWith("image/")); if (fs.length) handleFiles(fs); });
+fileInput.addEventListener("change", () => { if (fileInput.files.length) handleFiles([...fileInput.files]); fileInput.value = ""; });
+document.addEventListener("paste", e => {
+  const items = [...(e.clipboardData || {}).items || []].filter(i => i.type && i.type.startsWith("image/"));
+  if (items.length) handleFiles(items.map(i => i.getAsFile()));
+});
+
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("無法讀取圖片：" + file.name));
+    img.src = url;
+  });
+}
+
+async function handleFiles(files) {
+  clearError(); clearStatus();
+  showStatus("讀取圖片中…");
+  let added = 0;
+  for (const f of files) {
+    try {
+      const img = await loadImage(f);
+      const src = { id: "src_" + Date.now().toString(36) + (added++), name: f.name || "pasted-image.png", img, width: img.naturalWidth, height: img.naturalHeight, boxes: [] };
+      sources.push(src);
+      currentSrcId = src.id;
+    } catch (e) { showError(e.message); }
+  }
+  if (!sources.length) { clearStatus(); return; }
+  $("fileName").textContent = "已載入 " + sources.length + " 張圖片";
+  $("fileName").classList.remove("hidden");
+  $("processBtn").disabled = false;
+  refreshSourceBar();
+  processAll(true);
+  clearStatus();
+}
+
+function refreshSourceBar() {
+  const bar = $("sourceBar");
+  if (!sources.length) { bar.classList.add("hidden"); return; }
+  bar.classList.remove("hidden");
+  const sel = $("sourceSelect");
+  sel.innerHTML = "";
+  sources.forEach(s => {
+    const o = document.createElement("option");
+    o.value = s.id; o.textContent = s.name + " (" + s.width + "×" + s.height + ")";
+    sel.appendChild(o);
+  });
+  sel.value = currentSrcId;
+  const cur = sources.find(s => s.id === currentSrcId);
+  $("sourceInfo").textContent = cur ? cur.boxes.length + " 個區域" : "";
+}
+$("sourceSelect").addEventListener("change", () => { currentSrcId = $("sourceSelect").value; renderPreview(); });
+
+$("clearBtn").addEventListener("click", () => {
+  sources = []; currentSrcId = null; pieceSeq = 0;
+  $("fileName").classList.add("hidden");
+  $("sourceBar").classList.add("hidden");
+  $("previewSec").classList.add("hidden");
+  $("resultsSec").classList.add("hidden");
+  $("resultsGrid").innerHTML = "";
+  $("processBtn").disabled = true;
+  clearError(); clearStatus();
+});
+
+/* ================= Settings ================= */
+function getSettings() {
+  const mode = document.querySelector('input[name="splitMode"]:checked').value;
+  return {
+    mode,
+    sensitivity: Number($("sensRange").value),
+    minPct: Number($("minSizeRange").value) / 10, // slider 1..100 -> 0.1%..10%
+    padding: Number($("padRange").value),
+    rows: Math.max(1, Number($("gridRows").value) || 1),
+    cols: Math.max(1, Number($("gridCols").value) || 1),
+    strips: Number($("stripCount").value),
+    fmt: document.querySelector('input[name="outFmt"]:checked').value,
+    jpgQ: Number($("jpgQ").value) / 100,
+    enhance: $("enhanceChk").checked,
+  };
+}
+function syncModeUI() {
+  const mode = document.querySelector('input[name="splitMode"]:checked').value;
+  $("autoSettings").classList.toggle("hidden", mode !== "auto");
+  $("gridSettings").classList.toggle("hidden", mode !== "grid");
+  $("stripSettings").classList.toggle("hidden", !(mode === "h" || mode === "v"));
+  $("jpgQWrap").classList.toggle("hidden", document.querySelector('input[name="outFmt"]:checked').value !== "jpeg");
+}
+document.querySelectorAll('input[name="splitMode"]').forEach(r => r.addEventListener("change", () => { syncModeUI(); scheduleProcess(); }));
+document.querySelectorAll('input[name="outFmt"]').forEach(r => r.addEventListener("change", () => { syncModeUI(); }));
+$("sensRange").addEventListener("input", () => { $("sensVal").textContent = $("sensRange").value; scheduleProcess(); });
+$("minSizeRange").addEventListener("input", () => { $("minSizeVal").textContent = (Number($("minSizeRange").value) / 10).toFixed(1) + "%"; scheduleProcess(); });
+$("padRange").addEventListener("input", () => { $("padVal").textContent = $("padRange").value + " px"; scheduleProcess(); });
+$("gridRows").addEventListener("change", scheduleProcess);
+$("gridCols").addEventListener("change", scheduleProcess);
+$("stripCount").addEventListener("input", () => { $("stripVal").textContent = $("stripCount").value; scheduleProcess(); });
+$("jpgQ").addEventListener("input", () => { $("jpgQVal").textContent = $("jpgQ").value; });
+$("enhanceChk").addEventListener("change", () => renderResults());
+let processTimer = null;
+function scheduleProcess() { clearTimeout(processTimer); processTimer = setTimeout(() => processAll(false), 350); }
+$("processBtn").addEventListener("click", () => processAll(false));
+syncModeUI();
+
+/* ================= Detection (auto) ================= */
+function erode(mask, w, h) {
+  const out = new Uint8Array(w * h);
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+    const i = y * w + x;
+    out[i] = (mask[i] && mask[i-1] && mask[i+1] && mask[i-w] && mask[i+w] && mask[i-w-1] && mask[i-w+1] && mask[i+w-1] && mask[i+w+1]) ? 1 : 0;
+  }
+  return out;
+}
+function dilate(mask, w, h) {
+  const out = new Uint8Array(w * h);
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+    const i = y * w + x;
+    out[i] = (mask[i] || mask[i-1] || mask[i+1] || mask[i-w] || mask[i+w] || mask[i-w-1] || mask[i-w+1] || mask[i+w-1] || mask[i+w+1]) ? 1 : 0;
+  }
+  return out;
+}
+
+function detectBoxes(img, st) {
+  const MAXD = 900;
+  const scale = Math.min(1, MAXD / Math.max(img.width, img.height));
+  const w = Math.max(1, Math.round(img.width * scale));
+  const h = Math.max(1, Math.round(img.height * scale));
+  const cv = document.createElement("canvas");
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, w, h);
+  const d = ctx.getImageData(0, 0, w, h).data;
+  // Background colour: average of border pixels.
+  let br = 0, bg = 0, bb = 0, n = 0;
+  const sample = (x, y) => { const i = (y * w + x) * 4; br += d[i]; bg += d[i+1]; bb += d[i+2]; n++; };
+  for (let x = 0; x < w; x += 4) { sample(x, 0); sample(x, h - 1); }
+  for (let y = 0; y < h; y += 4) { sample(0, y); sample(w - 1, y); }
+  br /= n; bg /= n; bb /= n;
+  const thr = Math.max(8, Math.min(115, 115 - st.sensitivity));
+  const mask = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const r = d[i*4] - br, g = d[i*4+1] - bg, b = d[i*4+2] - bb;
+    if (Math.sqrt(r*r + g*g + b*b) > thr) mask[i] = 1;
+  }
+  const opened = dilate(erode(mask, w, h), w, h);
+  // Connected components (BFS, 4-neighbour).
+  const labels = new Int32Array(w * h).fill(-1);
+  const minArea = (st.minPct / 100) * w * h;
+  const raw = [];
+  const stack = [];
+  let label = 0;
+  for (let i = 0; i < w * h; i++) {
+    if (!opened[i] || labels[i] !== -1) continue;
+    let minX = w, minY = h, maxX = -1, maxY = -1, area = 0;
+    stack.length = 0; stack.push(i); labels[i] = label;
+    while (stack.length) {
+      const p = stack.pop();
+      const x = p % w, y = (p / w) | 0;
+      area++;
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+      if (x > 0 && opened[p-1] && labels[p-1] === -1) { labels[p-1] = label; stack.push(p-1); }
+      if (x < w-1 && opened[p+1] && labels[p+1] === -1) { labels[p+1] = label; stack.push(p+1); }
+      if (y > 0 && opened[p-w] && labels[p-w] === -1) { labels[p-w] = label; stack.push(p-w); }
+      if (y < h-1 && opened[p+w] && labels[p+w] === -1) { labels[p+w] = label; stack.push(p+w); }
+    }
+    if (area >= minArea) raw.push({ x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 });
+    label++;
+  }
+  // Merge overlapping / very close boxes (gap <= 6px in analysis coords).
+  const GAP = 6;
+  let merged = raw.map(b => ({ ...b }));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    outer: for (let i = 0; i < merged.length; i++) for (let j = i + 1; j < merged.length; j++) {
+      const a = merged[i], b = merged[j];
+      const overlap = !(a.x + a.w + GAP < b.x || b.x + b.w + GAP < a.x || a.y + a.h + GAP < b.y || b.y + b.h + GAP < a.y);
+      if (overlap) {
+        const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
+        const x2 = Math.max(a.x + a.w, b.x + b.w), y2 = Math.max(a.y + a.h, b.y + b.h);
+        merged[i] = { x, y, w: x2 - x, h: y2 - y };
+        merged.splice(j, 1);
+        changed = true;
+        break outer;
+      }
+    }
+  }
+  // Scale back to full resolution, add padding, clamp, sort top-to-bottom then left-to-right.
+  const boxes = merged.map(b => {
+    let x = Math.round(b.x / scale) - st.padding;
+    let y = Math.round(b.y / scale) - st.padding;
+    let x2 = Math.round((b.x + b.w) / scale) + st.padding;
+    let y2 = Math.round((b.y + b.h) / scale) + st.padding;
+    x = Math.max(0, x); y = Math.max(0, y);
+    x2 = Math.min(img.width, x2); y2 = Math.min(img.height, y2);
+    return { x, y, w: x2 - x, h: y2 - y, selected: true };
+  }).filter(b => b.w > 8 && b.h > 8);
+  boxes.sort((a, b) => (a.y - b.y) || (a.x - b.x));
+  return boxes;
+}
+
+function gridBoxes(img, st) {
+  const boxes = [];
+  const cw = img.width / st.cols, ch = img.height / st.rows;
+  for (let r = 0; r < st.rows; r++) for (let c = 0; c < st.cols; c++) {
+    boxes.push({ x: Math.round(c * cw), y: Math.round(r * ch), w: Math.round((c + 1) * cw) - Math.round(c * cw), h: Math.round((r + 1) * ch) - Math.round(r * ch), selected: true });
+  }
+  return boxes;
+}
+function stripBoxes(img, st) {
+  const boxes = [];
+  if (st.mode === "h") {
+    const ch = img.height / st.strips;
+    for (let i = 0; i < st.strips; i++) boxes.push({ x: 0, y: Math.round(i * ch), w: img.width, h: Math.round((i + 1) * ch) - Math.round(i * ch), selected: true });
+  } else {
+    const cw = img.width / st.strips;
+    for (let i = 0; i < st.strips; i++) boxes.push({ x: Math.round(i * cw), y: 0, w: Math.round((i + 1) * cw) - Math.round(i * cw), h: img.height, selected: true });
+  }
+  return boxes;
+}
+
+function processAll(fromUpload) {
+  if (!sources.length) return;
+  const st = getSettings();
+  showStatus(fromUpload ? "偵測與切割中…" : "重新切割中…");
+  // Run async so the UI can paint the status first.
+  setTimeout(() => {
+    try {
+      for (const src of sources) {
+        let boxes;
+        if (st.mode === "auto") boxes = detectBoxes(src.img, st);
+        else if (st.mode === "grid") boxes = gridBoxes(src.img, st);
+        else boxes = stripBoxes(src.img, st);
+        // Keep the user's toggled-off boxes when re-processing the same layout is not possible;
+        // simplest correct behaviour: fresh boxes, all selected.
+        src.boxes = boxes;
+      }
+      clearStatus();
+      refreshSourceBar();
+      renderPreview();
+      renderResults();
+    } catch (e) {
+      clearStatus();
+      showError("切割失敗：" + e.message);
+    }
+  }, 30);
+}
+
+/* ================= Preview ================= */
+let previewScale = 1;
+function renderPreview() {
+  const sec = $("previewSec");
+  const src = sources.find(s => s.id === currentSrcId);
+  if (!src) { sec.classList.add("hidden"); return; }
+  sec.classList.remove("hidden");
+  const cv = $("previewCanvas");
+  const maxW = 760;
+  const scale = Math.min(1, maxW / src.width);
+  previewScale = scale;
+  cv.width = Math.round(src.width * scale);
+  cv.height = Math.round(src.height * scale);
+  const ctx = cv.getContext("2d");
+  ctx.drawImage(src.img, 0, 0, cv.width, cv.height);
+  src.boxes.forEach((b, i) => {
+    const x = b.x * scale, y = b.y * scale, w = b.w * scale, h = b.h * scale;
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = b.selected ? "#22c55e" : "#ef4444";
+    ctx.setLineDash(b.selected ? [] : [6, 4]);
+    ctx.strokeRect(x, y, w, h);
+    ctx.setLineDash([]);
+    ctx.fillStyle = b.selected ? "#22c55e" : "#ef4444";
+    ctx.font = "bold 13px sans-serif";
+    const label = "#" + (i + 1) + (b.selected ? "" : " ✕");
+    const tw = ctx.measureText(label).width;
+    ctx.fillRect(x, y - 18 < 0 ? y : y - 18, tw + 8, 18);
+    ctx.fillStyle = "#fff";
+    ctx.fillText(label, x + 4, y - 18 < 0 ? y + 13 : y - 5);
+  });
+  $("boxCount").textContent = "— " + src.boxes.filter(b => b.selected).length + " / " + src.boxes.length + " 個區域已選取";
+}
+$("previewCanvas").addEventListener("click", e => {
+  const src = sources.find(s => s.id === currentSrcId);
+  if (!src) return;
+  const rect = $("previewCanvas").getBoundingClientRect();
+  const px = (e.clientX - rect.left) / previewScale;
+  const py = (e.clientY - rect.top) / previewScale;
+  // Toggle the topmost box containing the point (check in reverse = last drawn on top).
+  for (let i = src.boxes.length - 1; i >= 0; i--) {
+    const b = src.boxes[i];
+    if (px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) {
+      b.selected = !b.selected;
+      break;
+    }
+  }
+  renderPreview();
+  renderResults();
+});
+
+/* ================= Results & download ================= */
+function cropCanvas(src, box, st) {
+  const cv = document.createElement("canvas");
+  cv.width = Math.max(1, box.w);
+  cv.height = Math.max(1, box.h);
+  const ctx = cv.getContext("2d");
+  if (st.enhance) { try { ctx.filter = "contrast(1.12) saturate(1.18) brightness(1.03)"; } catch (e) {} }
+  ctx.drawImage(src.img, box.x, box.y, box.w, box.h, 0, 0, box.w, box.h);
+  return cv;
+}
+function pieceName(src, idx) {
+  const st = getSettings();
+  const base = src.name.replace(/\.[^.]+$/, "") || "photo";
+  const ext = st.fmt === "jpeg" ? "jpg" : "png";
+  return base + "-" + String(idx + 1).padStart(2, "0") + "." + ext;
+}
+function thumbURL(src, box) {
+  const st = getSettings();
+  const scale = Math.min(1, 220 / Math.max(box.w, box.h));
+  const cv = document.createElement("canvas");
+  cv.width = Math.max(1, Math.round(box.w * scale));
+  cv.height = Math.max(1, Math.round(box.h * scale));
+  const ctx = cv.getContext("2d");
+  ctx.drawImage(src.img, box.x, box.y, box.w, box.h, 0, 0, cv.width, cv.height);
+  return cv.toDataURL("image/jpeg", 0.82);
+}
+function selectedPieces() {
+  const out = [];
+  for (const src of sources) src.boxes.forEach((b, i) => { if (b.selected) out.push({ src, box: b, idx: i }); });
+  return out;
+}
+function renderResults() {
+  const sec = $("resultsSec");
+  const grid = $("resultsGrid");
+  const pieces = selectedPieces();
+  const total = sources.reduce((s, x) => s + x.boxes.length, 0);
+  if (!total) { sec.classList.add("hidden"); grid.innerHTML = ""; return; }
+  sec.classList.remove("hidden");
+  $("resultCount").textContent = "— " + pieces.length + " 張已選取 / 共 " + total + " 張";
+  $("downloadSelBtn").disabled = pieces.length === 0;
+  $("downloadZipBtn").disabled = pieces.length === 0;
+  grid.innerHTML = "";
+  for (const src of sources) {
+    src.boxes.forEach((b, i) => {
+      const card = document.createElement("div");
+      card.className = "thumb-card bg-gray-800 rounded-lg p-2 " + (b.selected ? "selected" : "opacity-60");
+      const img = document.createElement("img");
+      img.src = thumbURL(src, b);
+      img.className = "w-full rounded cursor-pointer";
+      img.alt = pieceName(src, i);
+      img.addEventListener("click", () => { b.selected = !b.selected; renderPreview(); renderResults(); });
+      const name = document.createElement("p");
+      name.className = "text-xs text-gray-300 mt-2 truncate";
+      name.textContent = pieceName(src, i) + " · " + b.w + "×" + b.h;
+      const row = document.createElement("div");
+      row.className = "flex gap-2 mt-2";
+      const dl = document.createElement("button");
+      dl.className = "flex-1 bg-sky-500 hover:bg-sky-400 px-2 py-1.5 rounded text-xs font-semibold disabled:opacity-40";
+      dl.textContent = "⬇️ 下載";
+      dl.disabled = !b.selected;
+      dl.addEventListener("click", () => downloadPiece(src, b, i));
+      const tog = document.createElement("button");
+      tog.className = "bg-gray-700 hover:bg-gray-600 px-2 py-1.5 rounded text-xs";
+      tog.textContent = b.selected ? "取消" : "選取";
+      tog.addEventListener("click", () => { b.selected = !b.selected; renderPreview(); renderResults(); });
+      row.appendChild(dl); row.appendChild(tog);
+      card.appendChild(img); card.appendChild(name); card.appendChild(row);
+      grid.appendChild(card);
+    });
+  }
+}
+function downloadBlob(blob, filename) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+function cropBlob(src, box) {
+  const st = getSettings();
+  const cv = cropCanvas(src, box, st);
+  return new Promise(resolve => {
+    if (st.fmt === "jpeg") cv.toBlob(b => resolve(b), "image/jpeg", st.jpgQ);
+    else cv.toBlob(b => resolve(b), "image/png");
+  });
+}
+async function downloadPiece(src, box, idx) {
+  const blob = await cropBlob(src, box);
+  if (blob) downloadBlob(blob, pieceName(src, idx));
+}
+async function downloadPiecesAsZip(pieces) {
+  if (typeof JSZip === "undefined") { showError("ZIP 打包工具載入失敗，請檢查網路後重新整理。"); return; }
+  const zip = new JSZip();
+  const used = {};
+  for (const p of pieces) {
+    let name = pieceName(p.src, p.idx);
+    if (used[name]) { const dot = name.lastIndexOf("."); name = name.slice(0, dot) + "-" + (++used[name]) + name.slice(dot); }
+    used[name] = (used[name] || 0) + 1;
+    const blob = await cropBlob(p.src, p.box);
+    if (blob) zip.file(name, blob);
+  }
+  $("zipMsg").textContent = "打包中…";
+  $("zipMsg").classList.remove("hidden");
+  const blob = await zip.generateAsync({ type: "blob" });
+  downloadBlob(blob, "photo-splitter-" + new Date().toISOString().slice(0, 10) + ".zip");
+  $("zipMsg").textContent = "已下載 ZIP（" + pieces.length + " 張）。";
+}
+$("downloadSelBtn").addEventListener("click", async () => {
+  const pieces = selectedPieces();
+  if (!pieces.length) return;
+  $("downloadSelBtn").disabled = true;
+  for (const p of pieces) await downloadPiece(p.src, p.box, p.idx);
+  $("downloadSelBtn").disabled = false;
+});
+$("downloadZipBtn").addEventListener("click", async () => {
+  const pieces = selectedPieces();
+  if (!pieces.length) return;
+  $("downloadZipBtn").disabled = true;
+  try { await downloadPiecesAsZip(pieces); } catch (e) { showError("打包失敗：" + e.message); }
+  $("downloadZipBtn").disabled = false;
+});
+</script>
+</body>
+</html>
