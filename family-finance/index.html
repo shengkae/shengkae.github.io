@@ -61,9 +61,11 @@ input, select, textarea { color-scheme: dark;}
 <div>
 <label class="block text-sm text-gray-300 mb-1" for="modelSelect">Gemini 模型</label>
 <select id="modelSelect" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-400">
-<option value="gemini-2.0-flash" selected>gemini-2.0-flash（快速，推薦）</option>
-<option value="gemini-1.5-flash">gemini-1.5-flash</option>
-<option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite（最便宜）</option>
+<option value="gemini-3-flash-preview" selected>gemini-3-flash-preview（推薦）</option>
+<option value="gemini-3.5-flash">gemini-3.5-flash</option>
+<option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite（最便宜）</option>
+<option value="gemini-2.5-flash">gemini-2.5-flash</option>
+<option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
 </select>
 </div>
 <div>
@@ -307,8 +309,14 @@ const monthOf = d => (d || "").slice(0, 7);
 function esc(s) { return String(s?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");}
 
 /* ---------- Settings UI ---------- */
+// Migrate saved models that Google has retired (2.0-flash, 2.0-flash-lite, 1.5-flash are gone).
+const RETIRED_MODELS = ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash"];
+if (settings.model && RETIRED_MODELS.includes(settings.model)) {
+  settings.model = "gemini-3-flash-preview";
+  saveSettings(settings);
+}
 $("apiKeyInput").value = settings.apiKey || "";
-$("modelSelect").value = settings.model || "gemini-2.0-flash";
+$("modelSelect").value = settings.model || "gemini-3-flash-preview";
 $("gmailInput").value = settings.gmail || "";
 $("clientIdInput").value = settings.googleClientId || "";
 function refreshKeyStatus() {
@@ -423,7 +431,7 @@ clearError();
 $("processBtn").disabled = true;
 setProcess("Gemini 辨識中…（第一次可能要幾秒）", 30);
 try {
-const model = settings.model || "gemini-2.0-flash";
+const model = settings.model || "gemini-3-flash-preview";
 const url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + encodeURIComponent(settings.apiKey);
 const res = await fetch(url, {
 method: "POST",
