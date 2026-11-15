@@ -79,6 +79,16 @@ input, select, textarea { color-scheme: dark;}
 <p class="text-gray-500 text-xs mt-1">在 Google Cloud Console 建立 OAuth Client ID（Web 應用程式），把這個網址加入已授權的 JavaScript 來源。登入只用來識別你是誰、預填收件 Gmail；記帳資料仍存在你的瀏覽器，不會上傳。</p>
 </div>
 <div id="signinArea"></div>
+<div class="border-t border-gray-700 pt-4">
+<label class="block text-sm text-gray-300 mb-1">📊 同步到 Google 試算表「綜合年度費用總表」（選填）</label>
+<p class="text-gray-500 text-xs mb-2">存入新支出時，自動寫進試算表的「明細」分頁，並加總到「2026 Expense」當月各分類與總計；「12M Rolling」分頁會自動更新。需要用同一個 Google OAuth Client ID 授權 Sheets 寫入權限。</p>
+<div class="flex gap-2 flex-wrap">
+<input id="sheetIdInput" type="text" placeholder="試算表 ID" class="flex-1 min-w-[200px] bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-400" />
+<button id="connectSheetBtn" class="bg-emerald-500 hover:bg-emerald-400 px-4 py-2 rounded-lg text-sm font-semibold">連接試算表</button>
+<button id="disconnectSheetBtn" class="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded-lg text-sm">斷開</button>
+</div>
+<p id="sheetStatus" class="text-sm mt-2 text-gray-400">尚未連接試算表 — 記帳只存在你的瀏覽器。</p>
+</div>
 </div>
 </section>
 
@@ -383,6 +393,140 @@ area.innerHTML = '<p class="text-red-400 text-sm">Google 登入初始化失敗�
 }
 window.addEventListener("load", initSignIn);
 
+/* ---------- Google Sheets sync (綜合年度費用總表) ---------- */
+const DEFAULT_SHEET_ID = "1qFT_zj-9MIwJYLmHlziR1oAG9y79FdyxSqktA7JUrAk";
+const EXPENSE_SHEET_ID = 128183770; // "2026 Expense" tab id
+const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
+const CAT_TO_COL = {
+  "【食 (Food)】": 2, "【住 (Housing)】": 3, "【行 (Transport)】": 4,
+  "【衣/用品 (Shopping)】": 5, "【醫療 (Health)】": 6, "【教育 (Education)】": 7,
+  "【娛樂 (Entertainment)】": 8, "【財務/其他 (Finance)】": 9, "【財務/稅務 (Finance)】": 9,
+  "【現金提領 (Cash)】": 10, "【其他 (Other)】": 9,
+};
+let sheetToken = null;
+let tokenClient = null;
+$("sheetIdInput").value = settings.sheetId || DEFAULT_SHEET_ID;
+function refreshSheetStatus(msg, ok) {
+  const el = $("sheetStatus");
+  el.textContent = msg;
+  el.className = "text-sm mt-2 " + (ok ? "text-emerald-400" : "text-gray-400");
+}
+function sheetsApi(path, method, body) {
+  return fetch("https://sheets.googleapis.com/v4/spreadsheets/" + path, {
+    method: method || "GET",
+    headers: { "Authorization": "Bearer " + sheetToken, "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  }).then(async r => {
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((d.error && d.error.message) || ("Sheets API 錯誤（HTTP " + r.status + "）"));
+    return d;
+  });
+}
+function sheetsGet(sid, range) {
+  return sheetsApi(encodeURIComponent(sid) + "/values/" + encodeURIComponent(range), "GET");
+}
+function sheetsAppend(sid, range, values) {
+  return sheetsApi(encodeURIComponent(sid) + "/values/" + encodeURIComponent(range) + ":append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS", "POST", { range, majorDimension: "ROWS", values });
+}
+function sheetsUpdate(sid, range, values) {
+  return sheetsApi(encodeURIComponent(sid) + "/values/" + encodeURIComponent(range) + "?valueInputOption=USER_ENTERED", "PUT", { range, majorDimension: "ROWS", values });
+}
+function sheetsInsertRow(sid, sheetId, rowIndex0) {
+  return sheetsApi(encodeURIComponent(sid) + ":batchUpdate", "POST", { requests: [{ insertDimension: { range: { sheetId, dimension: "ROWS", startIndex: rowIndex0, endIndex: rowIndex0 + 1 }, inheritFromBefore: true } }] });
+}
+function requestSheetToken(promptMode) {
+  return new Promise((resolve, reject) => {
+    const cid = (settings.googleClientId || "").trim();
+    if (!cid) return reject(new Error("請先在設定區填入 Google OAuth Client ID。"));
+    if (!window.google || !google.accounts || !google.accounts.oauth2) return reject(new Error("Google 登入元件尚未載入，請確認連網後再試。"));
+    if (!tokenClient) {
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: cid,
+        scope: SHEETS_SCOPE,
+        callback: (resp) => {
+          if (resp && resp.access_token) { sheetToken = resp.access_token; resolve(sheetToken); }
+          else reject(new Error("未取得試算表授權。"));
+        },
+      });
+    }
+    tokenClient.requestAccessToken({ prompt: promptMode || "" });
+  });
+}
+$("connectSheetBtn").addEventListener("click", async () => {
+  settings.sheetId = $("sheetIdInput").value.trim() || DEFAULT_SHEET_ID;
+  saveSettings(settings);
+  refreshSheetStatus("正在請求試算表授權…", false);
+  try {
+    await requestSheetToken("consent");
+    refreshSheetStatus("✅ 已連接試算表（綜合年度費用總表）。存入新支出時會自動同步到「明細」與「2026 Expense」。", true);
+  } catch (e) {
+    refreshSheetStatus("連接失敗：" + e.message, false);
+  }
+});
+$("disconnectSheetBtn").addEventListener("click", () => {
+  sheetToken = null;
+  if (window.google && google.accounts && google.accounts.oauth2 && sheetToken) google.accounts.oauth2.revoke(sheetToken, () => {});
+  refreshSheetStatus("已斷開試算表 — 記帳只存在你的瀏覽器。", false);
+});
+$("sheetIdInput").addEventListener("change", () => { settings.sheetId = $("sheetIdInput").value.trim(); saveSettings(settings); });
+
+async function syncTransactionToSheet(tx, skipMonthly) {
+  if (!sheetToken) {
+    try { await requestSheetToken(""); } catch (e) { return { ok: false, reason: "not-connected" }; }
+  }
+  if (!sheetToken) return { ok: false, reason: "not-connected" };
+  const sid = settings.sheetId || DEFAULT_SHEET_ID;
+  if (tx.excluded) return { ok: true, skipped: true };
+  // 1. Append item rows to 明細 (one row per category split)
+  const detailRows = tx.items.filter(i => (Number(i.amount) || 0) > 0).map(it => [
+    tx.date, tx.store, it.category, Number(it.amount) || 0, tx.paymentMethod,
+    tx.isApplePay ? "是" : "否", tx.sourceType === "statement" ? "信用卡帳單" : "收據",
+    [it.note || "", tx.notes || ""].filter(Boolean).join("｜"),
+  ]);
+  if (detailRows.length) await sheetsAppend(sid, "明細!A:H", detailRows);
+  if (skipMonthly) return { ok: true, month: tx.date.slice(0, 7).replace("-", "/"), mode: "detail-only" };
+  // 2. Update the monthly row in "2026 Expense"
+  const monthLabel = tx.date.slice(0, 7).replace("-", "/"); // e.g. 2026/11
+  const resp = await sheetsGet(sid, "2026 Expense!A2:N100");
+  const values = resp.values || [];
+  let rowIdx = -1, rollingIdx = -1;
+  values.forEach((r, i) => {
+    const b = (r[1] || "").toString();
+    if (b.startsWith(monthLabel)) rowIdx = i;
+    if (b.trim() === "1Y Rolling $") rollingIdx = i;
+  });
+  const catAmt = {};
+  tx.items.forEach(it => {
+    const ci = CAT_TO_COL[it.category];
+    if (ci != null) catAmt[ci] = (catAmt[ci] || 0) + (Number(it.amount) || 0);
+  });
+  const num = v => Number(String(v == null ? "" : v).replace(/[^0-9.\-]/g, "")) || 0;
+  if (rowIdx >= 0) {
+    const sheetRow = rowIdx + 2;
+    const cur = values[rowIdx];
+    const newVals = [];
+    for (let c = 2; c <= 12; c++) {
+      let add = 0;
+      if (c === 11) add = tx.total;
+      else if (c === 12) add = tx.isApplePay ? tx.total : 0;
+      else add = catAmt[c] || 0;
+      newVals.push(num(cur[c]) + add);
+    }
+    await sheetsUpdate(sid, "2026 Expense!C" + sheetRow + ":M" + sheetRow, [newVals]);
+    return { ok: true, month: monthLabel, mode: "updated" };
+  }
+  // New month: insert a row above the rolling row, then write it
+  const insertIndex0 = rollingIdx >= 0 ? rollingIdx + 1 : values.length + 1;
+  await sheetsInsertRow(sid, EXPENSE_SHEET_ID, insertIndex0);
+  const newRow = insertIndex0 + 1; // sheet row number of the inserted row
+  const rowVals = new Array(13).fill("");
+  rowVals[1] = monthLabel;
+  for (let c = 2; c <= 11; c++) rowVals[c] = (c === 11) ? tx.total : (catAmt[c] || 0);
+  rowVals[12] = tx.isApplePay ? tx.total : 0;
+  await sheetsUpdate(sid, "2026 Expense!A" + newRow + ":M" + newRow, [rowVals]);
+  return { ok: true, month: monthLabel, mode: "created" };
+}
+
 /* ---------- Upload ---------- */
 const dropZone = $("dropZone"), fileInput = $("fileInput");
 dropZone.addEventListener("click", () => fileInput.click());
@@ -491,7 +635,7 @@ row.querySelector(".rv-amt").addEventListener("input", syncTotalFromItems);
 return row;
 }
 function syncTotalFromItems() {
-const sum = [...document.querySelectorAll("#rvItems.rv-amt")].reduce((s, el) => s + (Number(el.value) || 0), 0);
+const sum = [...document.querySelectorAll("#rvItems .rv-amt")].reduce((s, el) => s + (Number(el.value) || 0), 0);
 if (!$("rvExcluded").checked) $("rvTotal").value = sum;
 }
 function showReview(d, rawText) {
@@ -518,11 +662,11 @@ $("rvRawToggle").addEventListener("click", () => { $("rvRaw").classList.toggle("
 $("discardTxBtn").addEventListener("click", () => { $("reviewSec").classList.add("hidden"); currentResult = null;});
 
 /* ---------- Save + de-dup ---------- */
-$("saveTxBtn").addEventListener("click", () => {
-const items = [...document.querySelectorAll("#rvItems.rv-cat")].map((sel, i) => ({
+$("saveTxBtn").addEventListener("click", async () => {
+const items = [...document.querySelectorAll("#rvItems .rv-cat")].map((sel, i) => ({
 category: sel.value,
-amount: Number(document.querySelectorAll("#rvItems.rv-amt")[i].value) || 0,
-note: document.querySelectorAll("#rvItems.rv-note")[i].value || "",
+amount: Number(document.querySelectorAll("#rvItems .rv-amt")[i].value) || 0,
+note: document.querySelectorAll("#rvItems .rv-note")[i].value || "",
 })).filter(i => i.amount > 0 || i.note);
 const tx = applyChiuRules({
 store: $("rvStore").value.trim(),
@@ -540,21 +684,38 @@ tx.id = "tx_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7)
 tx.createdAt = new Date().toISOString();
 // De-dup: same store + amount + date
 const dup = transactions.find(t => t.store === tx.store && t.total === tx.total && t.date === tx.date &&!t.excluded &&!tx.excluded);
+let saved = false, replaced = false;
 if (dup && tx.sourceType === "statement") {
 // Credit card statement is the source of truth: replace the receipt record.
 transactions = transactions.filter(t => t.id!== dup.id);
 transactions.push(tx);
 saveTx(transactions);
 $("saveMsg").textContent = "✅ 已存入，並以信用卡帳單覆蓋了同一筆收據（避免重複計算 " + fmt$(tx.total) + "）。";
+saved = true; replaced = true;
 } else if (dup) {
 $("saveMsg").textContent = "⚠️ 已有相同商店、金額、日期的紀錄，未重複存入。";
 } else {
 transactions.push(tx);
 saveTx(transactions);
 $("saveMsg").textContent = "✅ 已存入帳本。";
+saved = true;
 }
 $("saveMsg").classList.remove("hidden");
 renderAll();
+if (saved && sheetToken) {
+try {
+const r = await syncTransactionToSheet(tx, replaced);
+if (r.ok && !r.skipped) {
+$("saveMsg").textContent += " 📊 已同步到試算表（明細＋" + r.month + " 月合計" + (r.mode === "created" ? "，已新增該月" : "") + "）。";
+} else if (r.ok && r.skipped) {
+$("saveMsg").textContent += "（不計入支出的項目未同步到試算表。）";
+}
+} catch (e) {
+$("saveMsg").textContent += " ⚠️ 試算表同步失敗：" + e.message + "（帳本已存入，可稍後重新連接再同步。）";
+}
+} else if (saved && !sheetToken) {
+$("saveMsg").textContent += "（未連接試算表，僅存於瀏覽器。）";
+}
 });
 
 /* ---------- Ledger + dashboard ---------- */
