@@ -23,8 +23,8 @@
       <h1 class="text-3xl font-bold">AI Doc Checker</h1>
       <span class="text-xs bg-gray-700 text-gray-300 rounded-full px-2.5 py-1">runs 100% in your browser — nothing is uploaded</span>
     </div>
-    <p class="text-gray-300 mt-2">Upload a document or paste text to estimate how much of it reads as AI-generated, then humanize it to lower the score.</p>
-    <p class="text-gray-400 text-sm mt-1">Heuristic estimate, not a definitive detector. It looks at writing patterns (repetitive phrasing, uniform sentences, AI clichés) — use it as a guide, not a verdict.</p>
+    <p class="text-gray-300 mt-2">Upload a document or paste text to estimate how much of it reads as AI-generated, then humanize it to lower the score. Works in English and Chinese （中文）.</p>
+    <p class="text-gray-400 text-sm mt-1">Heuristic estimate, not a definitive detector. It looks at writing patterns (repetitive phrasing, uniform sentences, AI clichés) — use it as a guide, not a verdict. Outline and bullet-heavy documents have fewer prose signals, so the score leans more on structure there.</p>
     <a href="https://shengkae.github.io/screen-capture-pdf/" class="text-sm text-sky-400 hover:text-sky-300 underline">← Back to Continuous Screen Capture Tool</a>
   </header>
 
@@ -182,17 +182,107 @@ const REPLACEMENTS = [
   [/\bwas not\b/gi, "wasn't"], [/\bwere not\b/gi, "weren't"]
 ];
 
+/* ================= Chinese AI phrases ================= */
+/* [phrase, weight] — multi-char clichés count fully (1), enumeration words and
+   single buzzwords count less (0.5 / 0.4). */
+const AI_PHRASES_ZH = [
+  ["值得注意的是", 1], ["需要注意的是", 1], ["值得一提的是", 1], ["值得關注的是", 1],
+  ["值得思考的是", 1], ["值得探討的是", 1], ["總而言之", 1], ["綜上所述", 1],
+  ["總的來說", 1], ["總結來說", 1], ["整體而言", 1], ["總體而言", 1],
+  ["簡而言之", 1], ["一言以蔽之", 1], ["歸根結底", 1], ["總之", 1],
+  ["進一步", 1], ["深入探討", 1], ["深入分析", 1], ["深入研究", 1],
+  ["發揮重要作用", 1], ["具有重要意義", 1], ["具有重要影響", 1],
+  ["具有深遠影響", 1], ["產生深遠影響", 1], ["扮演重要角色", 1],
+  ["扮演著重要角色", 1], ["至關重要", 1], ["顯而易見", 1], ["不言而喻", 1],
+  ["毫無疑問", 1], ["換句話說", 1], ["換言之", 1], ["也就是說", 1],
+  ["另一方面", 1], ["與此同時", 1], ["不僅如此", 1], ["除此之外", 1],
+  ["更重要的是", 1], ["可以看出", 1], ["由此可見", 1],
+  ["不可忽視的是", 1], ["不容忽視", 1], ["不可否認的是", 1],
+  ["應該指出的是", 1], ["需要指出的是", 1], ["從長遠來看", 1],
+  ["展望未來", 1], ["值得期待", 1], ["迎來新的機遇", 1], ["面臨新的挑戰", 1],
+  ["在當今", 1], ["在現代社會", 1], ["近年來", 1], ["角度來看", 1],
+  ["層面來看", 1], ["在很大程度上", 1], ["在某種程度上", 1],
+  ["某種程度上", 1], ["從根本上說", 1], ["從根本上來講", 1],
+  ["首先", 0.5], ["其次", 0.5], ["再者", 0.5], ["此外", 0.5],
+  ["另外", 0.5], ["最後", 0.5], ["第一", 0.5], ["第二", 0.5], ["第三", 0.5],
+  ["日益", 0.4], ["逐漸", 0.4], ["顯著", 0.4], ["顯然", 0.4], ["明顯地", 0.4]
+];
+
+const CONNECTORS_ZH = ["然而", "因此", "所以", "但是", "而且", "並且", "同時", "另外", "此外", "總之", "事實上", "實際上", "換言之", "也就是說", "綜上所述", "值得注意的是"];
+
+/* Chinese humanizer replacements: cliché -> plainer wording. */
+const REPLACEMENTS_ZH = [
+  [/值得注意的是/g, ""], [/需要注意的是/g, ""], [/值得一提的是/g, ""],
+  [/值得關注的是/g, ""], [/值得思考的是/g, ""], [/值得探討的是/g, ""],
+  [/總而言之/g, "總的來看"], [/綜上所述/g, ""], [/總的來說/g, "整體看"],
+  [/總結來說/g, "簡單說"], [/整體而言/g, "整體看"], [/總體而言/g, "整體看"],
+  [/簡而言之/g, "簡單說"], [/一言以蔽之/g, "一句話"], [/歸根結底/g, "說到底"],
+  [/總之/g, "總的來看"], [/進一步/g, "更進一步"], [/深入探討/g, "細看"],
+  [/深入分析/g, "細看"], [/深入研究/g, "細究"],
+  [/發揮重要作用/g, "很重要"], [/具有重要意義/g, "很重要"],
+  [/具有重要影響/g, "影響很大"], [/具有深遠影響/g, "影響深遠"],
+  [/產生深遠影響/g, "影響深遠"], [/扮演重要角色/g, "很重要"],
+  [/扮演著重要角色/g, "很重要"], [/至關重要/g, "很關鍵"],
+  [/顯而易見/g, "很明顯"], [/不言而喻/g, "不用多說"], [/毫無疑問/g, "無疑"],
+  [/換句話說/g, "換個說法"], [/換言之/g, "換句話說"], [/也就是說/g, "意思就是"],
+  [/另一方面/g, "另一邊"], [/與此同時/g, "同時"], [/不僅如此/g, "不只這樣"],
+  [/除此之外/g, "另外"], [/更重要的是/g, "更關鍵的是"],
+  [/可以看出/g, "看得出來"], [/由此可見/g, "所以"], [/不可忽視的是/g, "別忘了"],
+  [/不容忽視/g, "不能忽略"], [/不可否認的是/g, "不可否認"],
+  [/應該指出的是/g, ""], [/需要指出的是/g, ""], [/從長遠來看/g, "長期看"],
+  [/展望未來/g, "未來"], [/值得期待/g, "可以期待"], [/迎來新的機遇/g, "迎來新機會"],
+  [/面臨新的挑戰/g, "面對新挑戰"], [/在當今/g, "現在"], [/在現代社會/g, "現在"],
+  [/近年來/g, "這幾年"], [/角度來看/g, "來看"], [/層面來看/g, "來看"],
+  [/在很大程度上/g, "很大程度是"], [/在某種程度上/g, "某種程度是"],
+  [/某種程度上/g, "某種程度是"], [/從根本上說/g, "根本上"],
+  [/從根本上來講/g, "根本上"], [/日益/g, "越來越"], [/逐漸/g, "慢慢"],
+  [/顯著/g, "明顯"], [/顯然/g, "明顯"], [/明顯地/g, "明顯"],
+  [/首先/g, ""], [/其次/g, ""], [/再者/g, ""], [/此外/g, ""], [/另外/g, ""],
+];
+
 /* ================= Text helpers ================= */
-function splitSentences(text) {
-  return text.replace(/\n+/g, " ").match(/[^.!?]+[.!?]+["')\]]*\s*/g) || (text.trim() ? [text.trim()] : []);
+/* Chinese detection: CJK characters are >15% of non-space characters. */
+function isChineseText(text) {
+  const nonSpace = text.replace(/\s/g, "");
+  if (!nonSpace.length) return false;
+  const cjk = (nonSpace.match(/[\u4e00-\u9fff]/g) || []).length;
+  return cjk / nonSpace.length > 0.15;
 }
-function wordsOf(s) { return s.trim().split(/\s+/).filter(Boolean); }
-function wordCount(text) { return wordsOf(text).length; }
+
+/* Tokens: each CJK character is a token; Latin words and numbers are tokens.
+   Used for counts and diversity so Chinese text is measured in characters. */
+function tokensOf(text) {
+  return text.match(/[\u4e00-\u9fff]|[A-Za-z]+(?:['-][A-Za-z]+)*|\d+(?:[.,]\d+)*/g) || [];
+}
+function wordsOf(s) { return tokensOf(s); }
+function wordCount(text) { return tokensOf(text).length; }
+
+/* Split into sentences, preserving all text. Splits after CJK terminators
+   (。！？；) and after Latin terminators (. ! ?) only when followed by
+   whitespace + a sentence-start character or end of text — so ".pptx",
+   "3.5" and "U.S.A." are not treated as sentence ends. Newlines also
+   break sentences (headings, bullets, list items). */
+function splitSentences(text) {
+  const out = [];
+  for (const para of text.split(/\n+/)) {
+    const t = para.trim();
+    if (!t) continue;
+    const parts = t.split(/(?<=[。！？；])|(?<=[.!?])(?=\s+[A-Z\u4e00-\u9fff"'"'“‘\(\[]|\s*$)/);
+    for (const p of parts) { const s = p.trim(); if (s) out.push(s); }
+  }
+  return out.length ? out : (text.trim() ? [text.trim()] : []);
+}
+
+/* A line that looks like a heading / section marker (excluded from the
+   fragment factor, since headings are short by nature). */
+const HEADING_RE = /^(第[一二三四五六七八九十百]+[章節]|\d+(\.\d+)*\s*[.、]|[一二三四五六七八九十]+[、.]|（[一二三四五六七八九十]+）|第[一二三四五六七八九十]+[部分篇])/;
+function isHeading(s) { return HEADING_RE.test(s.trim()); }
 
 function analyze(text) {
+  const zh = isChineseText(text);
   const sentences = splitSentences(text).map(s => s.trim()).filter(Boolean);
-  const words = wordsOf(text);
-  const total = words.length;
+  const tokens = tokensOf(text);
+  const total = tokens.length;
   const lower = " " + text.toLowerCase().replace(/\s+/g, " ") + " ";
 
   // 1. AI phrase density — longest phrases first, consume matches so a long
@@ -200,63 +290,115 @@ function analyze(text) {
   // clichés count fully; single buzzwords count less (0.4).
   const found = {};
   let effHits = 0;
-  let consumed = " " + text.toLowerCase().replace(/\s+/g, " ") + " ";
-  const sortedPhrases = AI_PHRASES.slice().sort((a, b) => b.length - a.length);
-  sortedPhrases.forEach(p => {
-    const esc = p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const re = new RegExp("\\b" + esc + "\\b", "gi");
-    let m, count = 0;
-    while ((m = re.exec(consumed)) !== null) {
-      count++;
-      consumed = consumed.slice(0, m.index) + " ".repeat(m[0].length) + consumed.slice(m.index + m[0].length);
-      re.lastIndex = m.index + m[0].length;
-    }
-    if (count) {
-      found[p] = count;
-      effHits += count * (p.includes(" ") ? 1 : 0.4);
-    }
-  });
+  if (zh) {
+    let consumed = " " + text.replace(/\s+/g, " ") + " ";
+    const sorted = AI_PHRASES_ZH.slice().sort((a, b) => b[0].length - a[0].length);
+    sorted.forEach(([p, w]) => {
+      const esc = p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp(esc, "g");
+      let m, count = 0;
+      while ((m = re.exec(consumed)) !== null) {
+        count++;
+        consumed = consumed.slice(0, m.index) + " ".repeat(m[0].length) + consumed.slice(m.index + m[0].length);
+        re.lastIndex = m.index + m[0].length;
+      }
+      if (count) { found[p] = count; effHits += count * w; }
+    });
+  } else {
+    let consumed = " " + text.toLowerCase().replace(/\s+/g, " ") + " ";
+    const sortedPhrases = AI_PHRASES.slice().sort((a, b) => b.length - a.length);
+    sortedPhrases.forEach(p => {
+      const esc = p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp("\\b" + esc + "\\b", "gi");
+      let m, count = 0;
+      while ((m = re.exec(consumed)) !== null) {
+        count++;
+        consumed = consumed.slice(0, m.index) + " ".repeat(m[0].length) + consumed.slice(m.index + m[0].length);
+        re.lastIndex = m.index + m[0].length;
+      }
+      if (count) {
+        found[p] = count;
+        effHits += count * (p.includes(" ") ? 1 : 0.4);
+      }
+    });
+  }
   const phraseHits = Object.values(found).reduce((a, b) => a + b, 0);
-  const phraseDensity = total ? effHits / total * 1000 : 0; // weighted hits per 1000 words
+  const phraseDensity = total ? effHits / total * 1000 : 0; // weighted hits per 1000 tokens
   const phraseScore = Math.min(100, phraseDensity * 3.5);
 
-  // 2. Burstiness: coefficient of variation of sentence word counts
-  const lens = sentences.map(s => wordsOf(s).length).filter(n => n > 0);
+  // 2. Burstiness: coefficient of variation of sentence lengths (in tokens)
+  const lens = sentences.map(s => tokensOf(s).length).filter(n => n > 0);
   const mean = lens.length ? lens.reduce((a, b) => a + b, 0) / lens.length : 0;
   const sd = lens.length > 1 ? Math.sqrt(lens.reduce((a, n) => a + (n - mean) ** 2, 0) / lens.length) : 0;
   const cv = mean ? sd / mean : 0;
   // Human writing usually CV > 0.5; uniform AI text often < 0.4
   const burstScore = Math.max(0, Math.min(100, (0.55 - cv) / 0.55 * 100));
 
-  // 3. Lexical diversity (type-token ratio)
-  const unique = new Set(words.map(w => w.toLowerCase().replace(/[^a-z0-9']/g, ""))).size;
-  const ttr = total ? unique / total : 0;
-  // Very low diversity reads repetitive; very high is human. AI often sits mid-low.
-  const diversityScore = Math.max(0, Math.min(100, (0.55 - ttr) / 0.55 * 100));
+  // 3. Lexical diversity. English: word type-token ratio. Chinese: bigram
+  // (2-character) type-token ratio — single-character TTR is meaningless
+  // in Chinese because common characters repeat everywhere.
+  let ttr = 0, diversityScore = 0, diversityDetail = "";
+  if (zh) {
+    const cjk = text.replace(/[^\u4e00-\u9fff]/g, "");
+    const bigrams = [];
+    for (let i = 0; i < cjk.length - 1; i++) bigrams.push(cjk.slice(i, i + 2));
+    ttr = bigrams.length ? new Set(bigrams).size / bigrams.length : 0;
+    diversityScore = Math.max(0, Math.min(100, (0.60 - ttr) / 0.60 * 100));
+    diversityDetail = Math.round(ttr * 100) + "% unique 2-char pairs";
+  } else {
+    const unique = new Set(tokens.map(w => w.toLowerCase().replace(/[^a-z0-9']/g, ""))).size;
+    ttr = total ? unique / total : 0;
+    diversityScore = Math.max(0, Math.min(100, (0.55 - ttr) / 0.55 * 100));
+    diversityDetail = Math.round(ttr * 100) + "% unique words";
+  }
 
-  // 5. Repetitive sentence starters
-  const starters = sentences.map(s => (s.match(/^[A-Za-z']+/) || [""])[0].toLowerCase()).filter(Boolean);
+  // 4. Repetitive sentence starters (capped at 100 — a starter share above
+  // the threshold must not inflate the total past 100).
+  // English: first word. Chinese: first Latin word, else first 2 characters.
+  const starters = sentences.map(s => {
+    const m = s.match(/^[A-Za-z]+/);
+    if (m) return m[0].toLowerCase();
+    const c = s.match(/^[\u4e00-\u9fff]{1,2}/);
+    return c ? c[0] : "";
+  }).filter(Boolean);
   const starterCounts = {};
   starters.forEach(s => starterCounts[s] = (starterCounts[s] || 0) + 1);
   const topStarter = starters.length ? Math.max(...Object.values(starterCounts)) / starters.length : 0;
-  const starterScore = Math.round(Math.max(0, (topStarter - 0.15) / 0.35 * 100));
+  const starterScore = Math.min(100, Math.round(Math.max(0, (topStarter - 0.15) / 0.35 * 100)));
 
-  // 6. Formal connector overuse
-  const connectors = ["however", "therefore", "thus", "hence", "nevertheless", "nonetheless", "accordingly", "in contrast", "conversely", "subsequently"];
+  // 5. Formal connector overuse
+  const connectors = zh ? CONNECTORS_ZH : ["however", "therefore", "thus", "hence", "nevertheless", "nonetheless", "accordingly", "in contrast", "conversely", "subsequently"];
   let connHits = 0;
-  connectors.forEach(c => { const m = lower.match(new RegExp("\\b" + c + "\\b", "g")); if (m) connHits += m.length; });
+  if (zh) {
+    connectors.forEach(c => { const m = text.match(new RegExp(c, "g")); if (m) connHits += m.length; });
+  } else {
+    connectors.forEach(c => { const m = lower.match(new RegExp("\\b" + c + "\\b", "g")); if (m) connHits += m.length; });
+  }
   const connDensity = total ? connHits / total * 1000 : 0;
-  const connScore = Math.min(100, connDensity * 25);
+  // Count-based: a couple of connectors is normal; overuse is the signal.
+  const connScore = Math.min(100, Math.max(0, connHits - 2) * 20);
 
+  // 6. Short fragments — sentences that are just a noun phrase, no verb,
+  // typical of AI-generated outlines and bullet dumps. Headings excluded.
+  // English: < 4 words. Chinese: < 10 characters.
+  const nonHead = sentences.filter(s => !isHeading(s));
+  const fragThresh = zh ? 10 : 4;
+  const fragShare = nonHead.length ? nonHead.filter(s => tokensOf(s).length < fragThresh).length / nonHead.length : 0;
+  const fragScore = Math.min(100, Math.max(0, (fragShare - 0.10) / 0.45 * 100));
+
+  const weights = zh
+    ? { phrase: 0.30, burst: 0.15, diversity: 0.10, starter: 0.15, conn: 0.05, frag: 0.25 }
+    : { phrase: 0.30, burst: 0.20, diversity: 0.15, starter: 0.15, conn: 0.10, frag: 0.10 };
   const factors = [
-    { name: "AI cliché phrases", score: Math.round(phraseScore), weight: 0.35, detail: phraseHits + " hit" + (phraseHits === 1 ? "" : "s") },
-    { name: "Sentence burstiness", score: Math.round(burstScore), weight: 0.25, detail: "length varies " + (cv < 0.4 ? "very little" : cv < 0.55 ? "a bit" : "naturally") },
-    { name: "Vocabulary diversity", score: Math.round(diversityScore), weight: 0.15, detail: Math.round(ttr * 100) + "% unique words" },
-    { name: "Repetitive sentence starters", score: starterScore, weight: 0.15, detail: "top starter opens " + Math.round(topStarter * 100) + "% of sentences" },
-    { name: "Formal connectors", score: Math.round(connScore), weight: 0.10, detail: connHits + " formal connector" + (connHits === 1 ? "" : "s") }
+    { name: "AI cliché phrases", score: Math.round(phraseScore), weight: weights.phrase, detail: phraseHits + " hit" + (phraseHits === 1 ? "" : "s") },
+    { name: "Sentence burstiness", score: Math.round(burstScore), weight: weights.burst, detail: "length varies " + (cv < 0.4 ? "very little" : cv < 0.55 ? "a bit" : "naturally") },
+    { name: "Vocabulary diversity", score: Math.round(diversityScore), weight: weights.diversity, detail: diversityDetail },
+    { name: "Repetitive sentence starters", score: starterScore, weight: weights.starter, detail: "top starter opens " + Math.round(topStarter * 100) + "% of sentences" },
+    { name: "Formal connectors", score: Math.round(connScore), weight: weights.conn, detail: connHits + " formal connector" + (connHits === 1 ? "" : "s") },
+    { name: "Short fragments", score: Math.round(fragScore), weight: weights.frag, detail: Math.round(fragShare * 100) + "% of sentences are very short fragments" }
   ];
   const totalScore = Math.round(factors.reduce((a, f) => a + f.score * f.weight, 0));
-  return { score: totalScore, factors, found, phraseHits, sentences: sentences.length, words: total };
+  return { score: totalScore, factors, found, phraseHits, sentences: sentences.length, words: total, zh };
 }
 
 function verdictFor(score) {
@@ -269,17 +411,50 @@ function verdictFor(score) {
 /* ================= Humanizer ================= */
 /* Split one long sentence into two. Only splits that keep both halves as real
    sentences: independent clauses joined by and/but/so or ";", a bare "that"
-   clause, or a plain comma where neither half is a fragment. */
+   clause, or a plain comma where neither half is a fragment.
+   Chinese: split at ，+ conjunction （而且/但是/所以/因此/並且/同時/另外/此外/然而）
+   or ；, and end the first half with 。 (no capitalization in Chinese). */
 const BAD_SPLIT_FIRST = /^(on top of|in the end|in addition|for example|in fact|as a result|that means|what's more|plus|and|but|so|in short|all in all|first|second|third|finally|however|therefore|thus|moreover|furthermore|additionally|overall|ultimately)\b/i;
 const BAD_SPLIT_SECOND = /^(allowing|including|using|based|resulting|leading|making|providing|offering|enabling|helping|giving|leaving|following|according|despite|although|though|because|since|if|when|while|as|which|that|who|whom|whose)\b/i;
 
-function splitSentence(s) {
+function splitSentence(s, zh) {
+  if (zh) {
+    const tryZh = (first, second) => {
+      first = first.trim(); second = second.trim();
+      if (tokensOf(first).length < 12 || tokensOf(second).length < 8) return null;
+      return { first, second, diff: Math.abs(tokensOf(first).length - tokensOf(second).length) };
+    };
+    const pickZh = list => {
+      if (!list.length) return null;
+      list.sort((a, b) => b.diff - a.diff);
+      const b = list[0];
+      return [b.first.replace(/[。；]$/, "") + "。", b.second];
+    };
+    // 1. ，+ conjunction — keep the conjunction at the start of the second half
+    let list = [], m;
+    const re1 = /，\s*(而且|但是|所以|因此|並且|同時|另外|此外|然而|不過|可是)\s*/g;
+    while ((m = re1.exec(s)) !== null) {
+      const c = tryZh(s.slice(0, m.index), m[1] + s.slice(m.index + m[0].length));
+      if (c) list.push(c);
+    }
+    let r = pickZh(list);
+    if (r) return r;
+    // 2. ； — no plain-， split: a Chinese comma clause usually cannot stand
+    // alone as a sentence （而是…、逐步… would become fragments).
+    list = [];
+    const re2 = /；\s*/g;
+    while ((m = re2.exec(s)) !== null) {
+      const c = tryZh(s.slice(0, m.index), s.slice(m.index + m[0].length));
+      if (c) list.push(c);
+    }
+    return pickZh(list);
+  }
   const cap = t => t.charAt(0).toUpperCase() + t.slice(1);
   const trySplit = (first, second) => {
     first = first.trim(); second = second.trim();
-    if (wordsOf(first).length < 6 || wordsOf(second).length < 4) return null;
+    if (tokensOf(first).length < 6 || tokensOf(second).length < 4) return null;
     if (BAD_SPLIT_FIRST.test(first) || BAD_SPLIT_SECOND.test(second)) return null;
-    return { first, second, diff: Math.abs(wordsOf(first).length - wordsOf(second).length) };
+    return { first, second, diff: Math.abs(tokensOf(first).length - tokensOf(second).length) };
   };
   const pick = list => {
     if (!list.length) return null;
@@ -315,9 +490,9 @@ function splitSentence(s) {
   return pick(list);
 }
 
-/* Burstiness = coefficient of variation of sentence word counts. */
+/* Burstiness = coefficient of variation of sentence token counts. */
 function burstinessCV(sents) {
-  const ls = sents.map(s => wordsOf(s).length).filter(n => n > 0);
+  const ls = sents.map(s => tokensOf(s).length).filter(n => n > 0);
   if (ls.length < 2) return 0;
   const mean = ls.reduce((x, y) => x + y, 0) / ls.length;
   const sd = Math.sqrt(ls.reduce((x, n) => x + (n - mean) ** 2, 0) / ls.length);
@@ -325,15 +500,17 @@ function burstinessCV(sents) {
 }
 
 /* Split the longest sentences until their lengths vary like human writing
-   (CV >= 0.55). Splitting (not merging) is what creates real variance. */
-function varyLengths(sents) {
+   (CV >= 0.55). Splitting (not merging) is what creates real variance.
+   Chinese thresholds are in characters (longer units than English words). */
+function varyLengths(sents, zh) {
   const arr = sents.slice();
+  const minSplit = zh ? 30 : 12;
   let guard = 0;
   while (burstinessCV(arr) < 0.55 && guard++ < 20) {
-    const ls = arr.map(s => wordsOf(s).length);
+    const ls = arr.map(s => tokensOf(s).length);
     const maxI = ls.indexOf(Math.max(...ls));
-    if (ls[maxI] < 12) break; // nothing long enough to split usefully
-    const sp = splitSentence(arr[maxI]);
+    if (ls[maxI] < minSplit) break; // nothing long enough to split usefully
+    const sp = splitSentence(arr[maxI], zh);
     if (sp) { arr.splice(maxI, 1, ...sp); continue; }
     break;
   }
@@ -341,14 +518,60 @@ function varyLengths(sents) {
 }
 
 function humanize(text) {
+  const zh = isChineseText(text);
   let out = text;
-  REPLACEMENTS.forEach(([re, rep]) => { out = out.replace(re, rep); });
-  // Trim filler openers left behind
+  const reps = zh ? REPLACEMENTS_ZH : REPLACEMENTS;
+  reps.forEach(([re, rep]) => { out = out.replace(re, rep); });
+  if (zh) {
+    // Chinese: work on the whole text as a sequence of lines so adjacent
+    // short fragments (an outline's bullets) can be merged into flowing
+    // sentences. Headings and long lines are left in place.
+    const lines = out.split(/\n+/).map(l => l.trim()).filter(Boolean);
+    const merged = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (isHeading(line) || tokensOf(line).length >= 12) {
+        merged.push(line);
+        i++;
+      } else {
+        const group = [line.replace(/[。；]$/, "")];
+        let j = i + 1;
+        while (j < lines.length && group.length < 3 && !isHeading(lines[j]) && tokensOf(lines[j]).length < 12) {
+          group.push(lines[j].replace(/[。；]$/, ""));
+          j++;
+        }
+        merged.push(group.length >= 2 ? group.join("、") + "。" : line);
+        i = j;
+      }
+    }
+    // Split long lines for burstiness
+    const final = merged.map(line => {
+      if (tokensOf(line).length >= 30) {
+        const sents = splitSentences(line).map(s => s.trim()).filter(Boolean);
+        return varyLengths(sents, true).join("");
+      }
+      return line;
+    });
+    out = final.join("\n");
+    // Drop stray commas left by deleted phrases, collapse spaces
+    out = out.replace(/([。！？；\n]|^)\s*，/g, "$1").replace(/，\s*，/g, "，")
+      .replace(/。\s*，/g, "。").replace(/，\s*。/g, "。").replace(/、\s*。/g, "。")
+      .replace(/ {2,}/g, " ").replace(/\n{3,}/g, "\n\n");
+    return out.trim();
+  }
+  // English: trim filler openers left behind
   out = out.replace(/^\s*(note that|so,?)\s+/gim, "");
-  // Restructure sentence lengths for human-like burstiness
-  let sents = splitSentences(out).map(s => s.trim()).filter(Boolean);
-  sents = varyLengths(sents);
-  out = sents.join(" ");
+  // Process paragraph by paragraph so line breaks and structure survive.
+  const paras = out.split(/\n+/);
+  const done = paras.map(para => {
+    const t = para.trim();
+    if (!t) return "";
+    let sents = splitSentences(t).map(s => s.trim()).filter(Boolean);
+    sents = varyLengths(sents, false);
+    return sents.join(" ");
+  });
+  out = done.filter(Boolean).join("\n\n");
   // Clean up stray punctuation FIRST, then re-capitalize sentence starts
   out = out.replace(/ {2,}/g, " ").replace(/\s+([,.!?])/g, "$1").replace(/\. \./g, ".");
   out = out.replace(/([.!?])\s*,/g, "$1").replace(/,\s*,/g, ",").replace(/\s+,/g, ",");
@@ -376,10 +599,14 @@ const $ = id => document.getElementById(id);
 const inputText = $("inputText"), analyzeBtn = $("analyzeBtn"), wordCountEl = $("wordCount");
 
 function refreshCount() {
-  const n = wordCount(inputText.value);
-  wordCountEl.textContent = n + " word" + (n === 1 ? "" : "s");
-  analyzeBtn.disabled = n < 20;
-  analyzeBtn.textContent = n < 20 ? "Analyze (need 20+ words)" : "Analyze";
+  const text = inputText.value;
+  const zh = isChineseText(text);
+  const n = wordCount(text);
+  wordCountEl.textContent = zh ? n + " 字" : n + " word" + (n === 1 ? "" : "s");
+  // English needs 20+ words; Chinese needs 100+ characters to analyze reliably
+  const need = zh ? 100 : 20;
+  analyzeBtn.disabled = n < need;
+  analyzeBtn.textContent = n < need ? "Analyze (need " + (zh ? "100+ 字" : "20+ words") + ")" : "Analyze";
 }
 inputText.addEventListener("input", refreshCount);
 
