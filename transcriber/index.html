@@ -113,6 +113,10 @@ let currentDevice = null;
 
 async function loadModel(model, wantWebGpu) {
   if (transcriber && currentModel === model) return;
+  // Only try WebGPU when the caller confirmed a real adapter exists.
+  // navigator.gpu can exist while requestAdapter() returns null (headless
+  // browsers, VMs, no GPU), and a failed WebGPU attempt must not poison
+  // the WASM fallback.
   const devices = wantWebGpu ? ['webgpu', 'wasm'] : ['wasm'];
   let lastErr = null;
   for (const device of devices) {
@@ -128,6 +132,7 @@ async function loadModel(model, wantWebGpu) {
     } catch (err) {
       lastErr = err;
       transcriber = null;
+      self.postMessage({ type: 'backend-failed', device: device, message: String((err && err.message) || err) });
     }
   }
   throw lastErr || new Error('Could not load the model.');
@@ -205,7 +210,19 @@ const MODEL_SIZE = {
   "onnx-community/whisper-base": "~150 MB",
   "onnx-community/whisper-small": "~500 MB",
 };
-const webgpuAvailable = typeof navigator !== 'undefined' && !!navigator.gpu;
+/* WebGPU is only usable when a real GPU adapter exists. navigator.gpu can
+   exist while requestAdapter() returns null (headless browsers, VMs, no GPU),
+   so check for an actual adapter instead of trusting the API's presence. */
+let webgpuAvailable = false;
+async function detectWebGpu() {
+  if (typeof navigator === 'undefined' || !navigator.gpu) return false;
+  try {
+    const adapter = await navigator.gpu.requestAdapter();
+    return !!adapter;
+  } catch {
+    return false;
+  }
+}
 
 function fmtTime(s) {
   if (!isFinite(s) || s == null) s = 0;
@@ -338,6 +355,11 @@ function onWorkerMessage(e) {
       ? "Downloading model" + (d.file ? " — " + d.file.split("/").pop() : "") + (d.device ? " (" + d.device + ")" : "")
       : "Loading model…";
     setProgress(label, pct, d.total ? fmtBytes(d.loaded) + " / " + fmtBytes(d.total) : "");
+    return;
+  }
+  if (d.type === "backend-failed") {
+    // Diagnostic only: the worker already falls back to the next backend.
+    progressDetail.textContent = "Backend " + d.device + " unavailable (" + d.message.slice(0, 120) + ") — trying the next one…";
     return;
   }
   if (d.type === "loaded") {
@@ -478,7 +500,12 @@ audioPlayer.addEventListener("timeupdate", () => {
 });
 
 makeWorker();
-if (!webgpuAvailable) modelStatus.textContent = "WebGPU not detected — will run on WASM (slower). Chrome / Edge recommended.";
+detectWebGpu().then(ok => {
+  webgpuAvailable = ok;
+  modelStatus.textContent = ok
+    ? "WebGPU detected — will use your GPU when available, falling back to WASM."
+    : "No GPU detected — will run on WASM (slower, works everywhere). Chrome / Edge recommended.";
+});
 </script>
 </body>
 </html>
