@@ -497,18 +497,19 @@ async function transcribeSmallFile(model, language) {
    ffmpeg extracts one chunk at a time as 16 kHz mono WAV, Whisper transcribes
    it, the chunk is deleted, and the transcript grows. Only one chunk's audio
    is held in memory at a time. Uses the single-threaded ffmpeg core, which
-   works without cross-origin isolation (GitHub Pages sends no COOP/COEP). */
-const FFMPEG_BASE = "https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/esm/index.js";
-const FFMPEG_UTIL = "https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.2/dist/esm/index.js";
+   works without cross-origin isolation (GitHub Pages sends no COOP/COEP).
+   The @ffmpeg/ffmpeg wrapper is vendored same-origin (./ffmpeg/) because a
+   cross-origin module Worker cannot be constructed from the CDN; the core
+   (~30 MB) still loads from the CDN inside that same-origin worker. */
+const FFMPEG_BASE = "./ffmpeg/index.js";
 const FFMPEG_CORE_JS = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm/ffmpeg-core.js";
 const FFMPEG_CORE_WASM = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm/ffmpeg-core.wasm";
 
 async function loadFfmpeg() {
   if (ffmpegLoaded) return ffmpeg;
   setProgress("Loading audio converter…", 0, "Downloading ffmpeg.wasm (~30 MB, once — cached afterwards) so the large file can be split into chunks.");
-  const [{ FFmpeg }, { fetchFile }] = await Promise.all([import(FFMPEG_BASE), import(FFMPEG_UTIL)]);
+  const { FFmpeg } = await import(FFMPEG_BASE);
   ffmpeg = new FFmpeg();
-  ffmpeg._fetchFile = fetchFile;
   await ffmpeg.load({ coreURL: FFMPEG_CORE_JS, wasmURL: FFMPEG_CORE_WASM });
   ffmpegLoaded = true;
   return ffmpeg;
@@ -562,7 +563,7 @@ async function transcribeLargeFile(model, language) {
     const ext = (currentFileName.match(/\.([A-Za-z0-9]+)$/) || [])[1];
     inputName = ext ? ("input." + ext.toLowerCase()) : "input.mp3";
     setProgress("Preparing large file…", 0, "Copying the file into the converter (" + fmtBytes(currentFile.size) + ").");
-    await ff.writeFile(inputName, await ff._fetchFile(currentFile));
+    await ff.writeFile(inputName, new Uint8Array(await currentFile.arrayBuffer()));
     let chunkIndex = 0;
     let doneSeconds = 0;
     while (!cancelRequested) {
