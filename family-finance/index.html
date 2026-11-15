@@ -886,13 +886,13 @@ window.open(url, "_blank");
 
 /* ---------- Family key sharing via QR Code ---------- */
 function sharePayload() {
-  return JSON.stringify({ v: 1, geminiKey: settings.apiKey || "", clientId: settings.googleClientId || "", model: settings.model || "gemini-3-flash-preview" });
+  return JSON.stringify({ k: settings.apiKey || "", c: settings.googleClientId || "", m: settings.model || "gemini-3-flash-preview" });
 }
 $("shareQrBtn").addEventListener("click", () => {
   if (!settings.apiKey) { showError("請先在設定區儲存 Gemini API 金鑰，才能產生分享 QR Code。"); return; }
   if (typeof QRCode === "undefined") { showError("QR Code 產生器載入失敗，請檢查網路後重新整理頁面。"); return; }
   const box = $("qrBox"); box.innerHTML = "";
-  new QRCode(box, { text: sharePayload(), width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
+  new QRCode(box, { text: sharePayload(), width: 300, height: 300, correctLevel: QRCode.CorrectLevel.M });
   $("qrModal").classList.remove("hidden");
 });
 $("qrCloseBtn").addEventListener("click", () => { $("qrModal").classList.add("hidden"); $("qrBox").innerHTML = ""; });
@@ -901,7 +901,7 @@ $("scanQrBtn").addEventListener("click", () => {
   if (typeof Html5QrcodeScanner === "undefined") { showError("掃描器載入失敗，請檢查網路後重新整理頁面。"); return; }
   $("scanModal").classList.remove("hidden");
   $("scanStatus").textContent = "請將鏡頭對準家人手機上的 QR Code…";
-  qrScanner = new Html5QrcodeScanner("qrReader", { fps: 10, qrbox: { width: 250, height: 250 } }, false);
+  qrScanner = new Html5QrcodeScanner("qrReader", { fps: 10, qrbox: { width: 250, height: 250 }, videoConstraints: { facingMode: "environment" } }, false);
   qrScanner.render(onQrScanned, () => {});
 });
 function closeScanModal() {
@@ -909,22 +909,42 @@ function closeScanModal() {
   $("scanModal").classList.add("hidden");
 }
 $("scanCloseBtn").addEventListener("click", closeScanModal);
-function onQrScanned(text) {
+function applyShareText(text) {
   let data = null;
   try { data = JSON.parse(text); } catch { data = null; }
-  if (data && typeof data === "object" && (data.geminiKey || data.clientId)) {
-    if (data.geminiKey) { settings.apiKey = String(data.geminiKey).trim(); $("apiKeyInput").value = settings.apiKey; }
-    if (data.clientId) { settings.googleClientId = String(data.clientId).trim(); $("clientIdInput").value = settings.googleClientId; }
-    if (data.model) { settings.model = String(data.model); $("modelSelect").value = settings.model; }
+  const key = data ? (data.geminiKey || data.k || "") : "";
+  const cid = data ? (data.clientId || data.c || "") : "";
+  const mdl = data ? (data.model || data.m || "") : "";
+  if (data && typeof data === "object" && (key || cid)) {
+    if (key) { settings.apiKey = String(key).trim(); $("apiKeyInput").value = settings.apiKey; }
+    if (cid) { settings.googleClientId = String(cid).trim(); $("clientIdInput").value = settings.googleClientId; }
+    if (mdl) { settings.model = String(mdl); $("modelSelect").value = settings.model; }
   } else if (text && text.trim()) {
     settings.apiKey = text.trim(); $("apiKeyInput").value = settings.apiKey;
-  } else { $("scanStatus").textContent = "無法讀取這個 QR Code，請再試一次。"; return; }
+  } else { return false; }
   saveSettings(settings);
   refreshKeyStatus();
   initSignIn();
+  return true;
+}
+function onQrScanned(text) {
+  if (!applyShareText(text)) { $("scanStatus").textContent = "無法讀取這個 QR Code，請再試一次。"; return; }
   closeScanModal();
   alert("已套用家人分享的金鑰設定。");
 }
+$("manualApplyBtn").addEventListener("click", () => {
+  const t = $("manualShareInput").value;
+  if (!applyShareText(t)) { $("scanStatus").textContent = "貼上的設定文字無法辨識，請確認是家人傳來的完整文字。"; return; }
+  closeScanModal();
+  alert("已套用家人分享的金鑰設定。");
+});
+$("qrCopyBtn").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(sharePayload());
+    $("qrCopyMsg").classList.remove("hidden");
+    setTimeout(() => $("qrCopyMsg").classList.add("hidden"), 2000);
+  } catch (e) { alert("複製失敗：" + e.message); }
+});
 
 renderAll();
 </script>
@@ -935,6 +955,9 @@ renderAll();
 <p class="text-gray-400 text-sm mb-3">讓家人在他的裝置上打開財務管家 → 設定 →「掃描 QR Code 設定」，對準這個畫面掃描即可。</p>
 <div id="qrBox" class="flex justify-center bg-white rounded-lg p-3 mx-auto w-fit"></div>
 <p class="text-amber-300 text-xs mt-3">⚠️ 內含你的 Gemini API 金鑰與 Google Client ID。只給家人掃描，不要截圖或外傳。</p>
+<button id="qrCopyBtn" class="mt-3 bg-violet-500 hover:bg-violet-400 px-4 py-2 rounded-lg text-sm font-semibold">📋 複製設定文字（掃不到時傳給家人貼上）</button>
+<p id="qrCopyMsg" class="text-emerald-400 text-xs mt-1 hidden">已複製設定文字。</p>
+<p class="text-gray-400 text-xs mt-2">掃描小提醒：請家人點「Scan using camera directly」直接用相機掃，把手機拿近一點讓 QR Code 佔滿掃描框，避開螢幕反光；先拍照再上傳常常掃不到。</p>
 <button id="qrCloseBtn" class="mt-4 bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">關閉</button>
 </div>
 </div>
@@ -945,6 +968,11 @@ renderAll();
 <h3 class="text-lg font-semibold mb-2">📷 掃描家人分享的 QR Code</h3>
 <p id="scanStatus" class="text-gray-400 text-sm mb-3"></p>
 <div id="qrReader" class="w-full"></div>
+<div class="mt-4 border-t border-gray-700 pt-3">
+<p class="text-sm text-gray-300 mb-2">掃不到？改用貼上的：請家人按「複製設定文字」傳給你，貼在下面再按套用。</p>
+<textarea id="manualShareInput" rows="3" placeholder="貼上家人傳來的設定文字" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-400"></textarea>
+<button id="manualApplyBtn" class="mt-2 bg-violet-500 hover:bg-violet-400 px-4 py-2 rounded-lg text-sm font-semibold">套用設定</button>
+</div>
 <button id="scanCloseBtn" class="mt-4 bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">關閉</button>
 </div>
 </div>
