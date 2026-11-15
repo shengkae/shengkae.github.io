@@ -107,7 +107,7 @@ input, select, textarea { color-scheme: dark;}
 <h2 class="text-lg font-semibold mb-3">📤 上傳收據 / 帳單</h2>
 <div id="dropZone" class="border-2 border-dashed border-gray-600 rounded-lg p-6 text-center cursor-pointer hover:border-sky-400 transition-colors">
 <p class="text-lg">拖放檔案到這裡，或 <span class="text-sky-400 underline">點此選擇</span></p>
-<p class="text-gray-400 text-sm mt-1">收據、存摺、信用卡帳單 — 圖片（PNG / JPG）或 PDF。手機可直接拍照上傳。</p>
+<p class="text-gray-400 text-sm mt-1">收據、存摺、信用卡帳單 — 圖片（PNG / JPG）或 PDF。手機可直接拍照上傳。上傳後自動開始辨識；若是信用卡帳單，請先選「信用卡帳單 PDF」再上傳。</p>
 <input id="fileInput" type="file" accept="image/*,.pdf" class="hidden" />
 <p id="fileName" class="text-sm text-emerald-400 mt-2 hidden"></p>
 </div>
@@ -115,7 +115,7 @@ input, select, textarea { color-scheme: dark;}
 <label class="text-sm text-gray-300">這份文件是：</label>
 <label class="text-sm"><input type="radio" name="sourceType" value="receipt" checked class="mr-1" />🧾 收據 / 消費單據</label>
 <label class="text-sm"><input type="radio" name="sourceType" value="statement" class="mr-1" />💳 信用卡帳單 PDF（對帳依據）</label>
-<button id="processBtn" class="bg-sky-500 hover:bg-sky-400 text-white font-semibold px-5 py-2 rounded-lg disabled:opacity-40 ml-auto" disabled>🤖 Gemini 辨識</button>
+<button id="processBtn" class="bg-sky-500 hover:bg-sky-400 text-white font-semibold px-5 py-2 rounded-lg disabled:opacity-40 ml-auto" disabled>🔄 重新辨識</button>
 </div>
 <div id="processStatus" class="hidden mt-4">
 <p id="processLabel" class="text-sm text-gray-300"></p>
@@ -568,6 +568,8 @@ currentB64 = btoa(b64);
 currentB64 = "";
 showError("讀取檔案失敗：" + e.message);
 }
+// 上傳後自動開始辨識（不需再按辨識按鈕）
+if (currentB64) $("processBtn").click();
 }
 
 function setProcess(label, pct) {
@@ -726,6 +728,11 @@ $("saveMsg").textContent += " ⚠️ 試算表同步失敗：" + e.message + "�
 } else if (saved && !sheetToken) {
 $("saveMsg").textContent += "（未連接試算表，僅存於瀏覽器。）";
 }
+// 存入後自動顯示最新報告
+if (saved) {
+generateReport();
+$("reportPreview").scrollIntoView({ behavior: "smooth", block: "start" });
+}
 });
 
 /* ---------- Ledger + dashboard ---------- */
@@ -834,7 +841,7 @@ renderAll();
 
 /* ---------- Email report ---------- */
 let lastReportHtml = "", lastReportText = "", lastReportSubject = "";
-$("reportBtn").addEventListener("click", () => {
+function generateReport() {
 const cur = new Date().toISOString().slice(0, 7);
 const monthTx = transactions.filter(t => monthOf(t.date) === cur &&!t.excluded);
 const monthlyTotal = monthTx.reduce((s, t) => s + (Number(t.total) || 0), 0);
@@ -869,7 +876,8 @@ $("reportPreview").innerHTML = lastReportHtml;
 $("reportPreview").classList.remove("hidden");
 $("copyHtmlBtn").disabled = false;
 $("gmailBtn").disabled = false;
-});
+}
+$("reportBtn").addEventListener("click", generateReport);
 $("copyHtmlBtn").addEventListener("click", async () => {
 try {
 await navigator.clipboard.writeText(lastReportHtml);
