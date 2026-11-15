@@ -3,7 +3,29 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
+<meta http-equiv="Expires" content="0" />
 <title>邱家財務管家 — Family AI Financial Manager</title>
+<script>
+// 自動更新：檢查是否有新版本，有的話重新載入最新版（網址保持不變，不用加版本號）
+(function () {
+  var VER = "202611152100";
+  try {
+    if (location.search.indexOf("v=") !== -1 && history.replaceState) history.replaceState(null, "", location.pathname);
+    var done = sessionStorage.getItem("ff-updated-to");
+    fetch("version.json?t=" + Date.now(), { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.v && d.v !== VER && done !== d.v) {
+          sessionStorage.setItem("ff-updated-to", d.v);
+          location.href = location.pathname + "?v=" + d.v;
+        }
+      })
+      .catch(function () {});
+  } catch (e) {}
+})();
+</script>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
