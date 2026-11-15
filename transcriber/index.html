@@ -24,7 +24,7 @@
       <span class="text-xs bg-gray-700 text-gray-300 rounded-full px-2.5 py-1">runs 100% in your browser — nothing is uploaded</span>
     </div>
     <p class="text-gray-300 mt-2">Upload an MP3 (or WAV, M4A, OGG, FLAC) and get a transcript with timestamps, powered by OpenAI Whisper running locally in your browser. English and Chinese supported, plus auto-detect.</p>
-    <p class="text-gray-400 text-sm mt-1">No server, no API key. The first run downloads the Whisper model (75–500&nbsp;MB depending on size) and caches it in your browser, so later runs start instantly.</p>
+    <p class="text-gray-400 text-sm mt-1">No server, no API key. The first run downloads the Whisper model (75–500&nbsp;MB depending on size) and caches it in your browser, so later runs start instantly. Large files over 200&nbsp;MB work too — they are processed in 10-minute chunks, so the transcript grows as it goes.</p>
     <a href="https://shengkae.github.io/" class="text-sm text-sky-400 hover:text-sky-300 underline">← Back to all tools</a>
   </header>
 
@@ -32,9 +32,10 @@
   <section class="bg-gray-900 rounded-xl p-5 shadow-lg">
     <div id="dropZone" class="border-2 border-dashed border-gray-600 rounded-lg p-6 text-center cursor-pointer hover:border-sky-400 transition-colors">
       <p class="text-lg">Drop an audio file here, or <span class="text-sky-400 underline">browse</span></p>
-      <p class="text-gray-400 text-sm mt-1">MP3, WAV, M4A, OGG, FLAC, WebM — works best for clips a few minutes long</p>
+      <p class="text-gray-400 text-sm mt-1">MP3, WAV, M4A, OGG, FLAC, WebM — including large files over 200 MB</p>
       <input id="fileInput" type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.webm,.mp4" class="hidden" />
       <p id="fileName" class="text-sm text-emerald-400 mt-2 hidden"></p>
+      <p id="largeFileNote" class="text-sm text-amber-300 mt-2 hidden"></p>
     </div>
 
     <div id="audioWrap" class="hidden mt-4">
@@ -63,6 +64,7 @@
 
     <div class="flex items-center gap-3 mt-4 flex-wrap">
       <button id="transcribeBtn" class="bg-sky-500 hover:bg-sky-400 text-white font-semibold px-5 py-2 rounded-lg disabled:opacity-40" disabled>Transcribe</button>
+      <button id="stopBtn" class="bg-red-600 hover:bg-red-500 text-white font-semibold px-4 py-2 rounded-lg hidden">Stop</button>
       <button id="sampleBtn" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">Try a sample (JFK, English)</button>
       <button id="clearBtn" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">Clear</button>
       <span id="modelStatus" class="text-gray-400 text-sm ml-auto"></span>
@@ -98,7 +100,7 @@
   </section>
 
   <footer class="text-gray-500 text-xs mt-8 text-center">
-    Whisper runs locally via Transformers.js (ONNX Runtime). Audio never leaves your browser. For hour-long recordings or bulk files, use a hosted transcription service instead.
+    Whisper runs locally via Transformers.js (ONNX Runtime). Audio never leaves your browser. Large files are split into 10-minute chunks with ffmpeg.wasm and transcribed one chunk at a time — long recordings take a while, and a GPU (WebGPU) makes them much faster.
   </footer>
 </div>
 
@@ -182,9 +184,10 @@ function makeWorker() {
 /* ================= State ================= */
 const $ = id => document.getElementById(id);
 const dropZone = $("dropZone"), fileInput = $("fileInput"), fileNameEl = $("fileName");
+const largeFileNote = $("largeFileNote");
 const audioWrap = $("audioWrap"), audioPlayer = $("audioPlayer"), audioInfo = $("audioInfo");
 const langSelect = $("langSelect"), modelSelect = $("modelSelect");
-const transcribeBtn = $("transcribeBtn"), sampleBtn = $("sampleBtn"), clearBtn = $("clearBtn");
+const transcribeBtn = $("transcribeBtn"), stopBtn = $("stopBtn"), sampleBtn = $("sampleBtn"), clearBtn = $("clearBtn");
 const modelStatus = $("modelStatus");
 const progressWrap = $("progressWrap"), progressLabel = $("progressLabel"), progressPct = $("progressPct");
 const progressBar = $("progressBar"), progressDetail = $("progressDetail");
@@ -197,13 +200,17 @@ const copyMsg = $("copyMsg");
 
 let currentFile = null;       // File or Blob
 let currentFileName = "";
-let audioData = null;         // Float32Array at 16 kHz mono
+let audioData = null;         // Float32Array at 16 kHz mono (small-file path only)
 let audioDuration = 0;
+let isLargeFile = false;      // true when the file goes through the chunked ffmpeg path
 let modelLoaded = null;       // model id currently loaded in the worker
 let modelDevice = "";
 let lastChunks = [];
 let lastText = "";
 let busy = false;
+let cancelRequested = false;  // set by the Stop button; the chunk loop exits after the current chunk
+let ffmpeg = null;            // ffmpeg.wasm instance (large-file path only)
+let ffmpegLoaded = false;
 
 const MODEL_SIZE = {
   "onnx-community/whisper-tiny": "~75 MB",
@@ -251,11 +258,21 @@ function hideProgress() { progressWrap.classList.add("hidden"); }
 
 function setBusy(b) {
   busy = b;
-  transcribeBtn.disabled = b || !audioData;
+  // Large files have no pre-decoded audioData, so the button state depends on
+  // whether a file is loaded, not on audioData.
+  transcribeBtn.disabled = b || !currentFile;
+  stopBtn.classList.toggle("hidden", !b);
   sampleBtn.disabled = b;
   modelSelect.disabled = b;
   langSelect.disabled = b;
 }
+
+/* Large-file thresholds. Decoding a >200 MB file in one go would need over a
+   gigabyte of RAM for the intermediate buffer, so files over 50 MB or longer
+   than 30 minutes go through the chunked ffmpeg path instead. */
+const LARGE_SIZE_BYTES = 50 * 1024 * 1024;
+const LARGE_DURATION_S = 1800;
+const CHUNK_SECONDS = 600; // 10 minutes per chunk for large files
 
 /* ================= Audio decoding (to 16 kHz mono) ================= */
 async function decodeTo16kMono(file) {
@@ -273,6 +290,22 @@ async function decodeTo16kMono(file) {
   return { data: Float32Array.from(rendered.getChannelData(0)), duration: decoded.duration };
 }
 
+/* Read the duration from the file's metadata without decoding the whole
+   file. This is fast even for a 200 MB recording. */
+function getAudioDuration(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const a = new Audio();
+    a.preload = "metadata";
+    const done = (d) => { URL.revokeObjectURL(url); resolve(d); };
+    a.onloadedmetadata = () => done(isFinite(a.duration) ? a.duration : 0);
+    a.onerror = () => done(0);
+    // Some browsers never fire loadedmetadata for odd files; don't hang.
+    setTimeout(() => done(0), 8000);
+    a.src = url;
+  });
+}
+
 /* ================= File handling ================= */
 function resetResults() {
   resultsSec.classList.add("hidden");
@@ -283,14 +316,33 @@ function resetResults() {
 async function handleFile(file) {
   clearError();
   resetResults();
+  cancelRequested = false;
   currentFile = file;
   currentFileName = file.name || "audio";
+  isLargeFile = false;
+  audioData = null;
   fileNameEl.textContent = "Loaded: " + currentFileName + " (" + fmtBytes(file.size) + ")";
   fileNameEl.classList.remove("hidden");
+  largeFileNote.classList.add("hidden");
   audioWrap.classList.remove("hidden");
   audioPlayer.src = URL.createObjectURL(file);
-  audioInfo.textContent = "Decoding audio…";
+  audioInfo.textContent = "Reading file…";
   transcribeBtn.disabled = true;
+  // Get the duration from metadata first — decoding a huge file just to learn
+  // how long it is would blow up memory.
+  audioDuration = await getAudioDuration(file);
+  isLargeFile = file.size > LARGE_SIZE_BYTES || audioDuration > LARGE_DURATION_S;
+  if (isLargeFile) {
+    const chunks = Math.max(1, Math.ceil(audioDuration / CHUNK_SECONDS));
+    audioInfo.textContent = "Duration " + fmtTime(audioDuration) + " · " + fmtBytes(file.size) + " · large file — will be processed in " + chunks + " chunks of " + (CHUNK_SECONDS / 60) + " minutes";
+    largeFileNote.textContent = "Large file: transcription runs in " + chunks + " chunks of " + (CHUNK_SECONDS / 60) + " minutes. A converter (~30 MB) downloads once, then the transcript appears chunk by chunk. Keep this tab open — long recordings take a while.";
+    largeFileNote.classList.remove("hidden");
+    transcribeBtn.disabled = false;
+    if (modelLoaded) modelStatus.textContent = "Model ready: " + shortModel(modelLoaded) + (modelDevice ? " (" + modelDevice + ")" : "");
+    return;
+  }
+  // Small file: decode the whole thing up front (fast path).
+  audioInfo.textContent = "Decoding audio…";
   try {
     const r = await decodeTo16kMono(file);
     audioData = r.data;
@@ -314,9 +366,12 @@ dropZone.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (
 fileInput.addEventListener("change", () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
 
 clearBtn.addEventListener("click", () => {
+  cancelRequested = true;
   currentFile = null; currentFileName = ""; audioData = null; audioDuration = 0;
+  isLargeFile = false;
   fileInput.value = "";
   fileNameEl.classList.add("hidden");
+  largeFileNote.classList.add("hidden");
   audioWrap.classList.add("hidden");
   audioPlayer.removeAttribute("src");
   audioInfo.textContent = "";
@@ -346,6 +401,9 @@ sampleBtn.addEventListener("click", async () => {
 });
 
 /* ================= Worker messages ================= */
+/* waitForWorker resolves with the outcome of the next worker reply, so the
+   caller can decide what to do with it (small files show the whole result at
+   once; large files append one chunk at a time). */
 let pendingResolve = null;
 function onWorkerMessage(e) {
   const d = e.data || {};
@@ -366,22 +424,15 @@ function onWorkerMessage(e) {
     modelLoaded = d.model;
     modelDevice = d.device || "";
     modelStatus.textContent = "Model ready: " + shortModel(modelLoaded) + (modelDevice ? " (" + modelDevice + ")" : "");
-    hideProgress();
-    if (pendingResolve) { const r = pendingResolve; pendingResolve = null; r(); }
+    if (pendingResolve) { const r = pendingResolve; pendingResolve = null; r({ type: "loaded" }); }
     return;
   }
   if (d.type === "result") {
-    hideProgress();
-    setBusy(false);
-    showResults(d.text, d.chunks || []);
-    if (pendingResolve) { const r = pendingResolve; pendingResolve = null; r(); }
+    if (pendingResolve) { const r = pendingResolve; pendingResolve = null; r({ type: "result", text: d.text || "", chunks: d.chunks || [] }); }
     return;
   }
   if (d.type === "error") {
-    hideProgress();
-    setBusy(false);
-    showError(d.message || "Transcription failed.");
-    if (pendingResolve) { const r = pendingResolve; pendingResolve = null; r(); }
+    if (pendingResolve) { const r = pendingResolve; pendingResolve = null; r({ type: "error", message: d.message || "Transcription failed." }); }
   }
 }
 
@@ -389,22 +440,38 @@ function waitForWorker() {
   return new Promise((resolve) => { pendingResolve = resolve; });
 }
 
+/* Load the Whisper model in the worker if it isn't already loaded.
+   Returns true on success. */
+async function ensureModelLoaded(model) {
+  if (modelLoaded === model) return true;
+  setProgress("Downloading model — " + shortModel(model) + " (" + (MODEL_SIZE[model] || "") + ")", 0, "First run downloads the model; it is cached in your browser afterwards.");
+  worker.postMessage({ type: "load", model: model, webgpu: webgpuAvailable });
+  const out = await waitForWorker();
+  if (out.type === "loaded" && modelLoaded === model) return true;
+  showError(out.message || "Could not load the model.");
+  return false;
+}
+
 transcribeBtn.addEventListener("click", async () => {
-  if (!audioData || busy) return;
+  if (!currentFile || busy) return;
   if (!workerReady) { showError("The transcription worker did not start. Try reloading the page in Chrome or Edge."); return; }
   clearError();
   resetResults();
+  cancelRequested = false;
   setBusy(true);
   const model = modelSelect.value;
   const language = langSelect.value;
-  // Load the model first if needed
-  if (modelLoaded !== model) {
-    setProgress("Downloading model — " + shortModel(model) + " (" + (MODEL_SIZE[model] || "") + ")", 0, "First run downloads the model; it is cached in your browser afterwards.");
-    worker.postMessage({ type: "load", model: model, webgpu: webgpuAvailable });
-    await waitForWorker();
-    if (modelLoaded !== model) { setBusy(false); return; } // load failed, error already shown
+  if (!await ensureModelLoaded(model)) { setBusy(false); return; }
+  if (isLargeFile) {
+    await transcribeLargeFile(model, language);
+  } else {
+    await transcribeSmallFile(model, language);
   }
-  // Transcribe — transfer the audio buffer to the worker (zero-copy)
+  setBusy(false);
+});
+
+/* Small files: the whole audio is already decoded in audioData. */
+async function transcribeSmallFile(model, language) {
   setProgress("Transcribing…", 0, "Whisper is listening to " + fmtTime(audioDuration) + " of audio. This runs on your device and can take a while for long files.");
   // Fake progress while the worker runs (it reports no per-chunk progress)
   let fakePct = 0;
@@ -414,8 +481,140 @@ transcribeBtn.addEventListener("click", async () => {
   }, 1000);
   const audioCopy = audioData.slice();
   worker.postMessage({ type: "transcribe", audio: audioCopy, model: model, language: language, webgpu: webgpuAvailable }, [audioCopy.buffer]);
-  await waitForWorker();
+  const out = await waitForWorker();
   clearInterval(tick);
+  hideProgress();
+  if (out.type === "result") {
+    showResults(out.text, out.chunks, 0);
+  } else {
+    showError(out.message || "Transcription failed.");
+  }
+}
+
+/* ================= Large files: ffmpeg.wasm chunked path ================= */
+/* Decoding a >200 MB file in one go would need over a gigabyte of RAM for the
+   intermediate buffer, so large files are processed in 10-minute chunks:
+   ffmpeg extracts one chunk at a time as 16 kHz mono WAV, Whisper transcribes
+   it, the chunk is deleted, and the transcript grows. Only one chunk's audio
+   is held in memory at a time. Uses the single-threaded ffmpeg core, which
+   works without cross-origin isolation (GitHub Pages sends no COOP/COEP). */
+const FFMPEG_BASE = "https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/esm/index.js";
+const FFMPEG_UTIL = "https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.2/dist/esm/index.js";
+const FFMPEG_CORE_JS = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm/ffmpeg-core.js";
+const FFMPEG_CORE_WASM = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm/ffmpeg-core.wasm";
+
+async function loadFfmpeg() {
+  if (ffmpegLoaded) return ffmpeg;
+  setProgress("Loading audio converter…", 0, "Downloading ffmpeg.wasm (~30 MB, once — cached afterwards) so the large file can be split into chunks.");
+  const [{ FFmpeg }, { fetchFile }] = await Promise.all([import(FFMPEG_BASE), import(FFMPEG_UTIL)]);
+  ffmpeg = new FFmpeg();
+  ffmpeg._fetchFile = fetchFile;
+  await ffmpeg.load({ coreURL: FFMPEG_CORE_JS, wasmURL: FFMPEG_CORE_WASM });
+  ffmpegLoaded = true;
+  return ffmpeg;
+}
+
+/* Parse a 16-bit PCM WAV (what ffmpeg writes) into a Float32Array.
+   Scans RIFF subchunks so extra chunks (fact, LIST, …) are skipped. */
+function parseWavPcm(u8) {
+  const view = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const ascii = (o, n) => { let s = ""; for (let i = 0; i < n; i++) s += String.fromCharCode(view.getUint8(o + i)); return s; };
+  if (ascii(0, 4) !== "RIFF" || ascii(8, 4) !== "WAVE") throw new Error("Not a WAV file.");
+  let off = 12;
+  let dataOff = -1, dataLen = 0, bits = 16, channels = 1;
+  while (off + 8 <= u8.length) {
+    const id = ascii(off, 4);
+    const size = view.getUint32(off + 4, true);
+    if (id === "fmt ") {
+      const fmt = view.getUint16(off + 8, true);
+      if (fmt !== 1 && fmt !== 3) throw new Error("Unsupported WAV format (" + fmt + ").");
+      channels = view.getUint16(off + 10, true);
+      bits = view.getUint16(off + 22, true);
+    } else if (id === "data") {
+      dataOff = off + 8; dataLen = size;
+      break;
+    }
+    off += 8 + size + (size % 2);
+  }
+  if (dataOff < 0) throw new Error("No audio data in WAV chunk.");
+  const bytesPerSample = bits / 8;
+  const frames = Math.floor(dataLen / (bytesPerSample * channels));
+  const out = new Float32Array(frames);
+  if (bits === 16) {
+    for (let i = 0; i < frames; i++) out[i] = view.getInt16(dataOff + i * 2 * channels, true) / 32768;
+  } else if (bits === 32) {
+    for (let i = 0; i < frames; i++) out[i] = view.getFloat32(dataOff + i * 4 * channels, true);
+  } else if (bits === 8) {
+    for (let i = 0; i < frames; i++) out[i] = (view.getUint8(dataOff + i * channels) - 128) / 128;
+  } else {
+    throw new Error("Unsupported WAV bit depth (" + bits + ").");
+  }
+  return out;
+}
+
+async function transcribeLargeFile(model, language) {
+  const totalChunks = Math.max(1, Math.ceil(audioDuration / CHUNK_SECONDS));
+  const startedAt = Date.now();
+  let inputName = "input";
+  try {
+    const ff = await loadFfmpeg();
+    // Keep the original extension so ffmpeg probes the format correctly.
+    const ext = (currentFileName.match(/\.([A-Za-z0-9]+)$/) || [])[1];
+    inputName = ext ? ("input." + ext.toLowerCase()) : "input.mp3";
+    setProgress("Preparing large file…", 0, "Copying the file into the converter (" + fmtBytes(currentFile.size) + ").");
+    await ff.writeFile(inputName, await ff._fetchFile(currentFile));
+    let chunkIndex = 0;
+    let doneSeconds = 0;
+    while (!cancelRequested) {
+      const start = chunkIndex * CHUNK_SECONDS;
+      if (start >= audioDuration && chunkIndex > 0) break;
+      if (chunkIndex >= 400) break; // safety cap: ~66 hours of audio
+      const label = "Chunk " + (chunkIndex + 1) + " of ~" + totalChunks;
+      setProgress(label + " — extracting…", (chunkIndex / totalChunks) * 100, "Cutting " + fmtTime(start) + "–" + fmtTime(Math.min(start + CHUNK_SECONDS, audioDuration)) + " with ffmpeg.");
+      const code = await ff.exec(["-ss", String(start), "-t", String(CHUNK_SECONDS), "-i", inputName, "-ar", "16000", "-ac", "1", "-f", "wav", "chunk.wav"]);
+      if (code !== 0) throw new Error("ffmpeg could not extract the chunk at " + fmtTime(start) + " (exit " + code + ").");
+      const wavBytes = await ff.readFile("chunk.wav");
+      await ff.deleteFile("chunk.wav");
+      const pcm = parseWavPcm(wavBytes);
+      const seconds = pcm.length / 16000;
+      if (seconds < 0.5) break; // past the end of the file
+      setProgress(label + " — transcribing…", (chunkIndex / totalChunks) * 100, "Whisper is listening to " + fmtTime(start) + "–" + fmtTime(start + seconds) + ". Elapsed " + Math.round((Date.now() - startedAt) / 1000) + "s.");
+      const audioCopy = pcm.slice();
+      worker.postMessage({ type: "transcribe", audio: audioCopy, model: model, language: language, webgpu: webgpuAvailable }, [audioCopy.buffer]);
+      const out = await waitForWorker();
+      if (out.type === "result") {
+        showResults(out.text, out.chunks, start);
+        doneSeconds = start + seconds;
+      } else {
+        showError("Chunk " + (chunkIndex + 1) + " failed: " + (out.message || "transcription failed.") + " Transcript so far is kept below.");
+        break;
+      }
+      chunkIndex++;
+      if (seconds < CHUNK_SECONDS - 1) break; // last (partial) chunk — file is done
+    }
+    const mins = Math.round((Date.now() - startedAt) / 60000 * 10) / 10;
+    if (cancelRequested) {
+      hideProgress();
+      resultMeta.textContent += " · stopped at " + fmtTime(doneSeconds) + " (partial transcript kept)";
+    } else {
+      setProgress("Done", 100, "Transcribed " + fmtTime(doneSeconds) + " in " + mins + " min.");
+      setTimeout(hideProgress, 1500);
+    }
+  } catch (err) {
+    hideProgress();
+    showError("Large-file processing failed: " + (err.message || err) + (lastChunks.length ? " Transcript so far is kept below." : " Try splitting the file into smaller parts, or use Chrome / Edge on a desktop."));
+  } finally {
+    if (ffmpegLoaded && ffmpeg) {
+      try { await ffmpeg.deleteFile(inputName); } catch (e) { /* already gone */ }
+      try { await ffmpeg.terminate(); } catch (e) { /* ignore */ }
+      ffmpeg = null; ffmpegLoaded = false;
+    }
+  }
+}
+
+stopBtn.addEventListener("click", () => {
+  cancelRequested = true;
+  setProgress("Stopping…", 100, "Finishing the current chunk, then stopping. The transcript so far is kept below.");
 });
 
 /* ================= Results ================= */
@@ -428,33 +627,37 @@ function vttTime(s) {
   return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0") + "." + String(ms).padStart(3, "0");
 }
 
-function showResults(text, chunks) {
-  lastText = (text || "").trim();
-  lastChunks = (chunks || []).filter(c => c && c.text && c.text.trim()).map(c => ({
-    start: c.timestamp ? (c.timestamp[0] || 0) : 0,
-    end: c.timestamp ? (c.timestamp[1] || 0) : 0,
+function showResults(text, chunks, offset) {
+  // Append one chunk's transcript (offset = chunk start in seconds).
+  // For small files this is called once with offset 0; for large files it is
+  // called per 10-minute chunk, so the transcript grows as it goes.
+  const off = offset || 0;
+  const clean = (chunks || []).filter(c => c && c.text && c.text.trim()).map(c => ({
+    start: (c.timestamp ? (c.timestamp[0] || 0) : 0) + off,
+    end: (c.timestamp ? (c.timestamp[1] || 0) : 0) + off,
     text: c.text.trim(),
   }));
+  const isFirst = lastChunks.length === 0;
+  lastChunks = lastChunks.concat(clean);
+  const t = (text || "").trim();
+  lastText = lastText ? (lastText + " " + t) : t;
   const langLabel = langSelect.value === "auto" ? "Auto-detect" : (langSelect.value === "chinese" ? "中文" : "English");
   resultMeta.textContent = (currentFileName ? currentFileName + " · " : "") + fmtTime(audioDuration) + " · " + langLabel + " · " + shortModel(modelLoaded) + (modelDevice ? " (" + modelDevice + ")" : "") + " · " + lastChunks.length + " segments";
-  segmentsEl.innerHTML = "";
-  if (lastChunks.length) {
-    lastChunks.forEach((c, i) => {
-      const row = document.createElement("div");
-      row.className = "seg flex gap-3 px-2 py-1.5 rounded-lg";
-      row.innerHTML = '<span class="text-sky-400 text-sm shrink-0 font-mono">' + fmtTime(c.start) + '</span><span class="text-sm">' + escapeHtml(c.text) + '</span>';
-      row.addEventListener("click", () => {
-        audioPlayer.currentTime = Math.max(0, c.start);
-        audioPlayer.play();
-        segmentsEl.querySelectorAll(".seg").forEach(el => el.classList.remove("active"));
-        row.classList.add("active");
-      });
-      segmentsEl.appendChild(row);
+  clean.forEach((c) => {
+    const row = document.createElement("div");
+    row.className = "seg flex gap-3 px-2 py-1.5 rounded-lg";
+    row.innerHTML = '<span class="text-sky-400 text-sm shrink-0 font-mono">' + fmtTime(c.start) + '</span><span class="text-sm">' + escapeHtml(c.text) + '</span>';
+    row.addEventListener("click", () => {
+      audioPlayer.currentTime = Math.max(0, c.start);
+      audioPlayer.play();
+      segmentsEl.querySelectorAll(".seg").forEach(el => el.classList.remove("active"));
+      row.classList.add("active");
     });
-  }
+    segmentsEl.appendChild(row);
+  });
   transcriptText.value = lastText;
   resultsSec.classList.remove("hidden");
-  resultsSec.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (isFirst) resultsSec.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
